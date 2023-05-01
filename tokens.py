@@ -108,6 +108,9 @@ class TokenSet(object):
     def has_bytes(self) -> bool:
         return all(t is not None for t in self._byte_tokens_by_value)
 
+    def has_hex(self) -> bool:
+        return all(t is not None for t in self._hex_tokens_by_value)
+
     @property
     def ntokens(self) -> int:
         return len(self._tokens)
@@ -117,6 +120,13 @@ def build_bytes_tokenset():
     token_set = TokenSet()
     for i in range(256):
         token_set.add_byte(i)
+    return token_set
+
+
+def build_hex_tokenset():
+    token_set = TokenSet()
+    for i in range(16):
+        token_set.add_hex(i)
     return token_set
 
 
@@ -132,7 +142,7 @@ class TokenStats(object):
     def count_byte(self, byte: int):
         self.input_size += 1
 
-    def report(self):
+    def report(self, show_tokens=True):
         print(f"Scanned {self.input_size} bytes")
         tokens_in_set = len(self.count)
         print(f"Using TokenSet with tokens_in_set")
@@ -141,10 +151,11 @@ class TokenStats(object):
         used_tokens = len(pairs)
         total_tokens = sum(self.count)
         print(f"Used {used_tokens} different tokens, total: {total_tokens}")
-        for token_id, count in pairs[:200]:
-            print(self.token_set._byte_tokens_by_value[token_id], " ", count)
-        if len(pairs) > 200:
-            print(". . .")
+        if show_tokens:
+            for token_id, count in pairs[:200]:
+                print(self.token_set._tokens[token_id], " ", count)
+            if len(pairs) > 200:
+                print(". . .")
 
 
 class Tokenizer(object):
@@ -179,3 +190,15 @@ class TokenizerBytes(Tokenizer):
     def tokenize(self, stream: Iterable[int]) -> Iterable[Token]:
         for b in stream:
             yield self.token_set._byte_tokens_by_value[b]
+
+
+class TokenizerHex(Tokenizer):
+    def __init__(self, token_set: TokenSet):
+        super().__init__(token_set)
+        assert self.token_set.has_hex()
+
+    def tokenize(self, stream: Iterable[int]) -> Iterable[Token]:
+        for b in stream:
+            yield self.token_set._hex_tokens_by_value[b // 16]
+            yield self.token_set._hex_tokens_by_value[b % 16]
+
