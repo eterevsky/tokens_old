@@ -31,7 +31,6 @@ def get_top_substrings(data: ChunkProvider, nstrings: int) -> list[tuple[bytes, 
             counts[bytes([byte])] = count
 
     for length in range(2, 1000):
-        print("Searching for substrings of length", length)
         max_current_len = max(len(s) for s in counts.keys())
         if max_current_len < length - 1:
             break
@@ -40,7 +39,7 @@ def get_top_substrings(data: ChunkProvider, nstrings: int) -> list[tuple[bytes, 
         for s in counts.keys():
             if len(s) == length - 1:
                 prefixes.add_string(s)
-        print("Using", prefixes.ntokens, "substrings of length", length - 1)
+        print("Length", length - 1, "substrings:", prefixes.ntokens)
 
         scanner = SuffixScanner(prefixes)
 
