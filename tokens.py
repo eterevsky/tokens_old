@@ -20,12 +20,18 @@ class Token(object):
         mandatory: bool = False,
     ):
         self.id = id  # ID in the TokenSet
-        self.value: int = value  # For BIT, TWO_BITS, HEX_DIGIT, BYTE
+        self.value: int = value  # For single-byte tokens
         self.string: bytes = string  # For BYTES and BYTE
         self.mandatory: bool = mandatory
+        # The longest other token in the token
+        self.suffix_token: Self = None
 
     def __repr__(self):
         return repr(self.string)
+
+    @property
+    def length(self):
+        return len(self.string)
 
 
 VALUE_0 = ord("0")
@@ -36,30 +42,30 @@ VALUE_f = ord("f")
 
 class TokenSet(object):
     def __init__(self):
-        self._tokens = []
-        self._tokens_by_string = {}
-        self._byte_tokens_by_value = [None] * 256
-        self._hex_tokens_by_value = [None] * 16
-        self._hex_marker = None
-        self._bit0 = None
-        self._bit1 = None
+        self.tokens = []
+        self.tokens_by_string = {}
+        self.byte_tokens_by_value = [None] * 256
+        self.hex_tokens_by_value = [None] * 16
+        self.hex_marker = None
+        self.bit0 = None
+        self.bit1 = None
 
     def add_token(self, token: Token):
         assert token.id is None
-        token.id = len(self._tokens)
-        self._tokens.append(token)
+        token.id = len(self.tokens)
+        self.tokens.append(token)
 
         if token.value is not None:
             assert 0 <= token.value < 256
-            assert self._byte_tokens_by_value[token.value] is None
-            self._byte_tokens_by_value[token.value] = token
+            assert self.byte_tokens_by_value[token.value] is None
+            self.byte_tokens_by_value[token.value] = token
 
             if token.value == 16:
-                self._hex_marker = token
+                self.hex_marker = token
             elif token.value == 17:
-                self._bit0 = token
+                self.bit0 = token
             elif token.value == 18:
-                self._bit1 = token
+                self.bit1 = token
             elif (
                 VALUE_0 <= token.value <= VALUE_9
                 or VALUE_a <= token.value <= VALUE_f
@@ -70,12 +76,12 @@ class TokenSet(object):
                     hex_value = token.value - VALUE_a + 10
 
                 assert 0 <= hex_value < 16
-                assert self._hex_tokens_by_value[hex_value] is None
-                self._hex_tokens_by_value[hex_value] = token
+                assert self.hex_tokens_by_value[hex_value] is None
+                self.hex_tokens_by_value[hex_value] = token
 
         assert token.string is not None
-        assert token.string not in self._tokens_by_string
-        self._tokens_by_string[token.string] = token
+        assert token.string not in self.tokens_by_string
+        self.tokens_by_string[token.string] = token
 
     def add_byte(self, value: int, mandatory: bool = True):
         string = bytes([value])
@@ -87,19 +93,28 @@ class TokenSet(object):
         self.add_token(token)
 
     def has_bytes(self) -> bool:
-        return all(t is not None for t in self._byte_tokens_by_value)
+        return all(t is not None for t in self.byte_tokens_by_value)
 
     def has_hex(self) -> bool:
-        return self._hex_marker is not None and all(
-            t is not None for t in self._hex_tokens_by_value
+        return self.hex_marker is not None and all(
+            t is not None for t in self.hex_tokens_by_value
         )
 
     def has_bits(self) -> bool:
-        return self._bit0 is not None and self._bit1 is not None
+        return self.bit0 is not None and self.bit1 is not None
 
     @property
     def ntokens(self) -> int:
-        return len(self._tokens)
+        return len(self.tokens)
+
+    def compute_suffix_tokens(self):
+        for token in self.tokens:
+            for start in range(1, token.length):
+                substring = token.string[start:]
+                suffix_token = self.tokens_by_string.get(substring)
+                if suffix_token is not None:
+                    token.suffix_token = suffix_token
+                    break
 
 
 def build_bits_tokenset():
@@ -146,7 +161,7 @@ class TokenStats(object):
         print(f"Tokens per byte: {tokens_per_byte}, bits per byte: {bits_per_byte}")
         if show_tokens:
             for token_id, count in pairs[:200]:
-                print(self.token_set._tokens[token_id], " ", count)
+                print(self.token_set.tokens[token_id], " ", count)
             if len(pairs) > 200:
                 print(". . .")
 
@@ -165,15 +180,15 @@ class Tokenizer(object):
 
     def fallback_tokens(self, byte: int) -> Iterable[Token]:
         if self._hex_fallback:
-            yield self.token_set._hex_marker
-            yield self.token_set._hex_tokens_by_value[byte // 16]
-            yield self.token_set._hex_tokens_by_value[byte % 16]
+            yield self.token_set.hex_marker
+            yield self.token_set.hex_tokens_by_value[byte // 16]
+            yield self.token_set.hex_tokens_by_value[byte % 16]
         else:
             for digit in POWERS2:
                 if byte & digit:
-                    yield self.token_set._bit1
+                    yield self.token_set.bit1
                 else:
-                    yield self.token_set._bit0
+                    yield self.token_set.bit0
 
     def tokenize_and_count(
         self, stream: Iterable[int], stats: TokenStats = None
@@ -198,9 +213,51 @@ class TokenizerBytes(Tokenizer):
 
     def tokenize(self, stream: Iterable[int]) -> Iterable[Token]:
         for b in stream:
-            byte_token = self.token_set._byte_tokens_by_value[b]
+            byte_token = self.token_set.byte_tokens_by_value[b]
             if byte_token is not None:
                 yield byte_token
             else:
                 for token in self.fallback_tokens(b):
                     yield token
+
+
+PARTIAL = "partial"
+
+class GreedyTokenizer(Tokenizer):
+    def __init__(self, token_set: TokenSet):
+        super().__init__(token_set)
+        self._prefix_to_token = {}
+
+        for token in token_set.tokens:
+            if token.string is None:
+                continue
+            self._prefix_to_token[token.string] = token
+            for l in range(1, len(token.string)):
+                prefix = token.string[:l]
+                if prefix not in self._prefix_to_token:
+                    self._prefix_to_token[prefix] = PARTIAL
+
+    def tokenize(self, data: Iterable[int]) -> Iterable[Token]:
+        data = bytes(data)
+        pos = 0
+        while pos < len(data):
+            longest_match = None
+            length = 1
+
+            while length <= len(data) - pos:
+                match = self._prefix_to_token.get(data[pos:pos+length])
+                if match is None:
+                    break
+
+                if match is not PARTIAL:
+                    longest_match = match
+                length += 1
+
+            if longest_match:
+                yield longest_match
+                pos += len(longest_match.string)
+            else:
+                b = data[pos]
+                for token in self.fallback_tokens(b):
+                    yield token
+                pos += 1

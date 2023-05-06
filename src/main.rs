@@ -1,6 +1,6 @@
 use std::env;
 use std::fs::File;
-use std::io::{self, Read, BufReader};
+use std::io::{self, Read, BufReader, Seek};
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -28,4 +28,8 @@ fn count_bytes<I: IntoIterator<Item = u8>>(bytes: I) {
     for b in 0..256 {
         println!("{:02x}  {}", b, counts[b]);
     }
+}
+
+fn top_substrings<B: Read + Seek>(reader: B, max_strings: usize) -> Vec<(Vec<u8>, usize) {
+
 }
