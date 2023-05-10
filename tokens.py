@@ -15,6 +15,7 @@ class Token(object):
         value: int = None,
         string: bytes = None,
         mandatory: bool = False,
+        is_literal: bool = False,
     ):
         self.id = id  # ID in the TokenSet
         self.value: int = value  # For single-byte tokens
@@ -22,6 +23,7 @@ class Token(object):
         self.mandatory: bool = mandatory
         # The longest other token in the token
         self.suffix_token: Self = None
+        self.is_literal: Self = is_literal
 
     def __repr__(self):
         return repr(self.string)
@@ -40,6 +42,18 @@ VALUE_f = ord("f")
 class TokenSet(object):
     def __init__(self):
         self.tokens = []
+
+        # Literals are used in suffix_tokens when there is single-byte token.
+        self.literals = [
+            Token(
+                id=None,
+                value=i,
+                string=bytes([i]),
+                mandatory=False,
+                is_literal=True,
+            )
+            for i in range(256)
+        ]
         self.tokens_by_string = {}
         self.byte_tokens_by_value = [None] * 256
         self.hex_tokens_by_value = [None] * 16
@@ -86,6 +100,8 @@ class TokenSet(object):
         self.add_token(token)
 
     def add_string(self, string: bytes):
+        if string in self.tokens_by_string:
+            return
         token = Token(None, None, string)
         self.add_token(token)
 
@@ -112,6 +128,9 @@ class TokenSet(object):
                 if suffix_token is not None:
                     token.suffix_token = suffix_token
                     break
+                elif len(substring) == 1:
+                    token.suffix_token = self.literals[substring[0]]
+                    break
 
 
 def build_bits_tokenset():
@@ -130,4 +149,3 @@ def build_hex_tokenset():
         token_set.add_byte(b, mandatory=True)
 
     return token_set
-

@@ -3,6 +3,9 @@ import random
 from typing import Iterable
 
 
+INF = float("inf")
+
+
 def stream_file(filename):
     with open(filename, "rb") as file:
         while True:
