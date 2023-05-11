@@ -1,0 +1,11 @@
+{
+  "tokens": ["\u0011", "\u0012"],
+  "stats": {
+    "ntokens": 2,
+    "scanned_bytes": 67180898,
+    "used_tokens": 2,
+    "total_tokens": 537447184,
+    "bytes_per_token": 0.125,
+    "bits_per_byte": 8.0
+  }
+}

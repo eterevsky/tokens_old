@@ -1,0 +1,28 @@
+{
+  "tokens": [
+    "\n",
+    "\u0011",
+    "\u0012",
+    " ",
+    "a",
+    "d",
+    "e",
+    "h",
+    "i",
+    "l",
+    "n",
+    "o",
+    "r",
+    "s",
+    "t",
+    "u"
+  ],
+  "stats": {
+    "ntokens": 16,
+    "scanned_bytes": 67181473,
+    "used_tokens": 16,
+    "total_tokens": 177402934,
+    "bytes_per_token": 0.3786942610543296,
+    "bits_per_byte": 10.562610557824476
+  }
+}

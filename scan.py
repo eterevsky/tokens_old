@@ -70,8 +70,8 @@ def top_strings(filename):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage:\npython tokenize.py <text file>")
+    if len(sys.argv) != 3:
+        print("Usage:\npython tokenize.py <text file> <output>")
         sys.exit(1)
     scan(sys.argv[1])
     # top_strings(sys.argv[1])

@@ -81,19 +81,35 @@ class TokenStats(object):
     def count_byte(self, byte: int):
         self.input_size += 1
 
+    @property
+    def total_tokens(self) -> int:
+        return sum(self.count)
+
+    @property
+    def used_tokens(self) -> int:
+        return sum(1 for count in self.count if count > 0)
+
+    def as_json(self) -> dict:
+        return {
+            "ntokens": self.token_set.ntokens,
+            "scanned_bytes": self.input_size,
+            "used_tokens": self.used_tokens,
+            "total_tokens": self.total_tokens,
+            "bytes_per_token": self.input_size / self.total_tokens,
+            "bits_per_byte": self.total_tokens * math.log2(self.token_set.ntokens) / self.input_size
+        }
+
     def report(self, show_tokens=True):
         print(f"Scanned {self.input_size} bytes")
         tokens_in_set = len(self.count)
         print(f"Using TokenSet with {tokens_in_set} tokens")
         pairs = [(i, count) for i, count in enumerate(self.count) if count > 0]
         pairs.sort(key=itemgetter(1), reverse=True)
-        used_tokens = len(pairs)
-        total_tokens = sum(self.count)
-        print(f"Used {used_tokens} different tokens, total: {total_tokens}")
-        tokens_per_byte = total_tokens / self.input_size
-        bits_per_byte = tokens_per_byte * math.log2(tokens_in_set)
+        print(f"Used {self.used_tokens} different tokens, total: {self.total_tokens}")
+        bytes_per_token = self.input_size / self.total_tokens
+        bits_per_byte = self.total_tokens * math.log2(tokens_in_set) / self.input_size
         print(
-            f"Tokens per byte: {tokens_per_byte}, bits per byte: {bits_per_byte}"
+            f"Bytes per token: {bytes_per_token}, bits per byte: {bits_per_byte}"
         )
         if show_tokens:
             for token_id, count in pairs[:200]:
@@ -281,6 +297,8 @@ class OptimalTokenizer(Tokenizer):
         self, state_deque: deque[DynState]
     ) -> tuple[Token, int]:
         first_token = state_deque[-1].first_token
+        if first_token is None:
+            return None, 0
         same_first = 1
 
         for i in range(len(state_deque) - 2, -1, -1):
@@ -302,6 +320,7 @@ class OptimalTokenizer(Tokenizer):
         same_first_token_steps: int = 0
 
         for token in self._suffix_scanner.scan(data):
+            # print(state_deque, token)
             state: DynState = self._create_new_state(state_deque, token)
             state_deque.append(state)
 
@@ -312,6 +331,7 @@ class OptimalTokenizer(Tokenizer):
                 same_first_token_steps = 1
 
             while same_first_token_steps >= self._max_token_length:
+                # print(same_first_token_steps, self._max_token_length)
                 for token in self._consume_first_token(
                     state_deque, current_first
                 ):

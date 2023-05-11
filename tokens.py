@@ -19,7 +19,7 @@ class Token(object):
     ):
         self.id = id  # ID in the TokenSet
         self.value: int = value  # For single-byte tokens
-        self.string: bytes = string  # For BYTES and BYTE
+        self.string: bytes = string
         self.mandatory: bool = mandatory
         # The longest other token in the token
         self.suffix_token: Self = None
@@ -31,6 +31,13 @@ class Token(object):
     @property
     def length(self):
         return len(self.string)
+
+    def as_json(self):
+        assert self.string is not None
+        try:
+            return self.string.decode("utf-8")
+        except UnicodeDecodeError:
+            return list(self.string)
 
 
 VALUE_0 = ord("0")
@@ -60,6 +67,9 @@ class TokenSet(object):
         self.hex_marker = None
         self.bit0 = None
         self.bit1 = None
+
+    def as_json(self) -> list:
+        return list(t.as_json() for t in self.tokens)
 
     def add_token(self, token: Token):
         assert token.id is None
@@ -94,7 +104,36 @@ class TokenSet(object):
         assert token.string not in self.tokens_by_string
         self.tokens_by_string[token.string] = token
 
-    def add_byte(self, value: int, mandatory: bool = True):
+    def remove_token(self, token: Token):
+        assert self.tokens[token.id] is token
+        self.tokens.pop(token.id)
+        del self.tokens_by_string[token.string]
+        if token.value is not None:
+            self.byte_tokens_by_value[token.value] = None
+            if (VALUE_0 <= token.value <= VALUE_9
+                or VALUE_a <= token.value <= VALUE_f):
+                if VALUE_0 <= token.value <= VALUE_9:
+                    hex_value = token.value - VALUE_0
+                else:
+                    hex_value = token.value - VALUE_a + 10
+                self.hex_tokens_by_value[hex_value] = None
+            elif token is self.hex_marker:
+                self.hex_marker = None
+            elif token is self.bit0:
+                self.bit0 = None
+            elif token is self.bit1:
+                self.bit1 = None
+
+        token.id = None
+        self._update_ids()
+
+    def _update_ids(self):
+        for i, token in enumerate(self.tokens):
+            token.id = i
+
+    def add_byte(self, value: int, mandatory: bool = False):
+        if self.byte_tokens_by_value[value] is not None:
+            return
         string = bytes([value])
         token = Token(None, value, string, mandatory=mandatory)
         self.add_token(token)
@@ -131,6 +170,10 @@ class TokenSet(object):
                 elif len(substring) == 1:
                     token.suffix_token = self.literals[substring[0]]
                     break
+
+    def sort(self):
+        self.tokens.sort(key=lambda t: t.string)
+        self._update_ids()
 
 
 def build_bits_tokenset():
