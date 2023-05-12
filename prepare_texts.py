@@ -1,7 +1,6 @@
-from gutenbergpy import textget
-from gutenbergpy.gutenbergcache import GutenbergCache
 import sys
 
+import textget
 
 END_SENTENCE = (".", "!", "?")
 

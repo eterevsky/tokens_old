@@ -1,11 +1,13 @@
 import sys
 from operator import itemgetter
+import json
+import cProfile
 
 import tokens
 from top_substrings import get_top_bytes, get_top_substrings
 from util import stream_file, TextFile, ChunkProvider
 from optimizer import build_top_substrings_token_set
-from tokenizer import TokenStats, GreedyTokenizer
+from tokenizer import TokenStats, GreedyTokenizer, build_from_json
 
 
 def get_tokenizers(data: ChunkProvider):
@@ -54,24 +56,29 @@ def get_tokenizers(data: ChunkProvider):
         yield tokens.GreedyTokenizer(token_set)
 
 
-def scan(filename):
-    data = ChunkProvider(TextFile(filename), 2048, 32768)
-    token_set = build_top_substrings_token_set(data, 256)
-    tokenizer = GreedyTokenizer(token_set)
-    stats = tokenizer.tokenize_chunks(data)
-    stats.report(show_tokens=True)
+def scan(tokens_json, filename):
+     with open(tokens_json) as save:
+          tokens_dict = json.load(save)
+     tokenizer = build_from_json(tokens_dict)
+     data = ChunkProvider(TextFile(filename))
+     stats = tokenizer.tokenize_chunks(data)
+     # cProfile.run('stats = tokenizer.tokenize_chunks(data)')
+     stats.report(show_tokens=False)
 
 
-def top_strings(filename):
-    data = ChunkProvider(TextFile(filename), 1024, 16384)
-    top_strings = get_top_substrings(data, 256)
-    for s, count in top_strings:
-        print(s, count)
+# if __name__ == "__main__":
+#     if len(sys.argv) != 3:
+#         print("Usage:\npython scan.py <tokens json> <data file>")
+#         sys.exit(1)
+#     scan(sys.argv[1], sys.argv[2])
+#     # top_strings(sys.argv[1])
 
 
-if __name__ == "__main__":
+def main():
     if len(sys.argv) != 3:
-        print("Usage:\npython tokenize.py <text file> <output>")
+        print("Usage:\npython scan.py <tokens json> <data file>")
         sys.exit(1)
-    scan(sys.argv[1])
-    # top_strings(sys.argv[1])
+    scan(sys.argv[1], sys.argv[2])
+
+
+cProfile.run('main()')

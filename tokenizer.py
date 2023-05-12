@@ -3,8 +3,10 @@ from itertools import islice
 import math
 from typing import Self, Iterable
 from operator import itemgetter
+import statistics
 
 from tokens import TokenSet, Token
+import tokens
 from util import ChunkProvider, INF
 
 
@@ -25,6 +27,10 @@ class SuffixScanner(object):
         for token in self._token_set.tokens:
             for end in range(1, token.length + 1):
                 self._add_state(token.string[:end])
+        for literal in self._token_set.literals:
+            if literal.string not in self._token_set.tokens_by_string:
+                self._add_state(literal.string)
+
         self._populate_next()
 
         self.current_state = None
@@ -38,6 +44,8 @@ class SuffixScanner(object):
             token = self._token_set.tokens_by_string.get(suffix_suffix)
             if token is not None:
                 break
+        if token is None and suffix:
+            token = self._token_set.literals[suffix[-1]]
         self._states[suffix] = ScannerState(suffix, token)
 
     def _populate_next(self):
@@ -52,14 +60,11 @@ class SuffixScanner(object):
                         break
                 assert state.next[next_byte] is not None
 
-    def scan(self, input: Iterable[int]) -> Iterable[Token | int]:
+    def scan(self, input: Iterable[int]) -> Iterable[Token]:
         state = self._states[b""]
         for byte in input:
             state = state.next[byte]
-            if state.token is None:
-                yield self._token_set.literals[byte]
-            else:
-                yield state.token
+            yield state.token
 
     def reset(self):
         self.current_state = self._states[b""]
@@ -125,22 +130,28 @@ class Tokenizer(object):
     def __init__(self, token_set: TokenSet):
         assert token_set.has_bits() or token_set.has_hex()
         self.hex_fallback = token_set.has_hex()
-        self.token_set = token_set
+        self.token_set: TokenSet = token_set
+        self.fallback_tokens: list[list[Token]] = self._make_fallbacks()
 
     def tokenize(self, stream: Iterable[int]) -> Iterable[Token]:
         pass
 
-    def fallback_tokens(self, byte: int) -> Iterable[Token]:
-        if self.hex_fallback:
-            yield self.token_set.hex_marker
-            yield self.token_set.hex_tokens_by_value[byte // 16]
-            yield self.token_set.hex_tokens_by_value[byte % 16]
-        else:
-            for digit in POWERS2:
-                if byte & digit:
-                    yield self.token_set.bit1
-                else:
-                    yield self.token_set.bit0
+    def _make_fallbacks(self) -> list[list[Token]]:
+        fallbacks = []
+        for i in range(256):
+            if self.hex_fallback:
+                fallbacks.append([self.token_set.hex_marker,
+                                  self.token_set.hex_tokens_by_value[i // 16],
+                                  self.token_set.hex_tokens_by_value[i % 16]])
+            else:
+                f = []
+                for digit in POWERS2:
+                    if i & digit:
+                        f.append(self.token_set.bit1)
+                    else:
+                        f.append(self.token_set.bit0)
+                fallbacks.append(f)
+        return fallbacks
 
     def tokenize_and_count(
         self, stream: Iterable[int], stats: TokenStats = None
@@ -175,7 +186,7 @@ class TokenizerBytes(Tokenizer):
             if byte_token is not None:
                 yield byte_token
             else:
-                for token in self.fallback_tokens(b):
+                for token in self.fallback_tokens[b]:
                     yield token
 
 
@@ -217,7 +228,7 @@ class GreedyTokenizer(Tokenizer):
                 pos += len(longest_match.string)
             else:
                 b = data[pos]
-                for token in self.fallback_tokens(b):
+                for token in self.fallback_tokens[b]:
                     yield token
                 pos += 1
 
@@ -243,66 +254,54 @@ class OptimalTokenizer(Tokenizer):
         self._literal_cost = 3 if self.hex_fallback else 8
 
     def _create_new_state(
-        self, state_deque: deque[DynState], token: Token
+        self, states: list[DynState], token: Token
     ) -> DynState:
         state = DynState()
 
         while token is not None:
             token_cost = self._literal_cost if token.is_literal else 1
-            assert token.length <= len(state_deque)
-            prev_state = state_deque[-token.length]
+            # assert token.length <= len(state_deque)
+            prev_state = states[-token.length]
             cost = prev_state.cost + token_cost
             if cost < state.cost:
                 state.cost = cost
                 state.last_token = token
-                if token.length == len(state_deque):
+                if token.length == len(states):
                     state.first_token = token
                 else:
                     assert prev_state.first_token is not None
                     state.first_token = prev_state.first_token
             token = token.suffix_token
 
-        assert state.cost > 0
-        assert state.last_token is not None
-        assert state.first_token is not None
+        # assert state.cost > 0
+        # assert state.last_token is not None
+        # assert state.first_token is not None
 
         return state
 
-    def _consume_first_token(self, state_deque: deque[DynState], token: Token):
-        # print("_consume_first_token", token)
-        if token.is_literal:
-            for tok in self.fallback_tokens(token.value):
-                yield tok
-        else:
-            yield token
+    def _consume_first_token(self, states: list[DynState], token: Token):
+        del states[:token.length]
 
-        for _ in range(token.length):
-            state_deque.popleft()
-
-        state_deque[0].first_token = None
-        state_deque[0].last_token = None
-
-        for i, state in islice(enumerate(state_deque), 1, None):
+        for i, state in enumerate(states):
             last_token = state.last_token
-            if last_token.length > i:
-                state.first_token = None
-            elif last_token.length == i:
+            last_token_length = last_token.length
+            if last_token_length < i:
+                state.first_token = states[i - last_token_length].first_token
+            elif last_token_length == i:
                 state.first_token = last_token
             else:
-                state.first_token = state_deque[
-                    i - last_token.length
-                ].first_token
+                state.first_token = None
 
     def _update_current_first(
-        self, state_deque: deque[DynState]
+        self, states: list[DynState]
     ) -> tuple[Token, int]:
-        first_token = state_deque[-1].first_token
+        first_token = states[-1].first_token
         if first_token is None:
             return None, 0
         same_first = 1
 
-        for i in range(len(state_deque) - 2, -1, -1):
-            state = state_deque[i]
+        for i in range(len(states) - 2, 0, -1):
+            state = states[i]
             if state.first_token == first_token:
                 same_first += 1
             else:
@@ -311,18 +310,21 @@ class OptimalTokenizer(Tokenizer):
         return first_token, same_first
 
     def tokenize(self, data: Iterable[int]) -> Iterable[Token]:
+        # state_len = []
+
         init_state = DynState()
         init_state.cost = 0
-        state_deque = deque([init_state])
+        states = [init_state]
         self._suffix_scanner.reset()
 
         current_first: Token = None
         same_first_token_steps: int = 0
 
         for token in self._suffix_scanner.scan(data):
+            # state_len.append(len(states))
             # print(state_deque, token)
-            state: DynState = self._create_new_state(state_deque, token)
-            state_deque.append(state)
+            state: DynState = self._create_new_state(states, token)
+            states.append(state)
 
             if state.first_token == current_first:
                 same_first_token_steps += 1
@@ -331,20 +333,43 @@ class OptimalTokenizer(Tokenizer):
                 same_first_token_steps = 1
 
             while same_first_token_steps >= self._max_token_length:
-                # print(same_first_token_steps, self._max_token_length)
-                for token in self._consume_first_token(
-                    state_deque, current_first
-                ):
-                    yield token
-                (
-                    current_first,
-                    same_first_token_steps,
-                ) = self._update_current_first(state_deque)
+                if current_first.is_literal:
+                    for fallback_token in self.fallback_tokens[current_first.value]:
+                        yield fallback_token
+                else:
+                    yield current_first
 
-        while len(state_deque) > 1:
-            for token in self._consume_first_token(state_deque, current_first):
-                yield token
+                self._consume_first_token(states, current_first)
+
+                current_first, same_first_token_steps = self._update_current_first(states)
+
+        while len(states) > 1:
+            if current_first.is_literal:
+                for fallback_token in self.fallback_tokens[current_first.value]:
+                    yield fallback_token
+            else:
+                yield current_first
+
+            self._consume_first_token(states, current_first)
             (
                 current_first,
                 same_first_token_steps,
-            ) = self._update_current_first(state_deque)
+            ) = self._update_current_first(states)
+
+        # print(statistics.median(state_len), statistics.mean(state_len), max(state_len))
+
+
+def build_from_json(save) -> Tokenizer:
+    if save.get("config", {}).get("fallback16", True):
+        token_set = tokens.build_hex_tokenset()
+    else:
+        token_set = tokens.build_bits_tokenset()
+
+    for s in save["tokens"]:
+        if isinstance(s, str):
+            token_bytes = s.encode("utf-8")
+        else:
+            token_bytes = bytes(s)
+        token_set.add_string(token_bytes)
+
+    return OptimalTokenizer(token_set)

@@ -91,12 +91,25 @@ def get_tokenizers(data: ChunkProvider, ntokens: int) -> Iterable[Tokenizer]:
     yield tokenizer
 
 
+def top_strings(data: ChunkProvider, ntokens: int) -> Iterable[Tokenizer]:
+    top_str = top_substrings.get_top_substrings(data, ntokens)
+    token_set = tokens.build_bits_tokenset()
+
+    for s, _ in top_str:
+        if token_set.ntokens >= ntokens: break
+        token_set.add_string(s)
+
+    tokenizer = OptimalTokenizer(token_set)
+    yield tokenizer
+
+
 def generate(data_file: str, ntokens: int, output_file: str):
     data = ChunkProvider(TextFile(data_file), 1024, 16384)
 
     best_tokenizer = None
     best_stats = None
-    for tokenizer in get_tokenizers(data, ntokens):
+    # for tokenizer in get_tokenizers(data, ntokens):
+    for tokenizer in top_strings(data, ntokens):
         stats = tokenizer.tokenize_chunks(data)
         stats.report()
         print()
@@ -104,10 +117,16 @@ def generate(data_file: str, ntokens: int, output_file: str):
             best_stats = stats
             best_tokenizer = tokenizer
 
-    best_stats.token_set.sort()
+    token_set = best_stats.token_set
+
+    token_set.sort()
+    assert token_set.has_bits() or token_set.has_hex()
     tokenizer_json = {
-        "tokens": best_stats.token_set.as_json(),
+        "tokens": token_set.as_json(),
         "stats": best_stats.as_json(),
+        "config": {
+            "fallback16": token_set.has_hex()
+        }
     }
 
     with open(output_file, "w", newline="") as f:

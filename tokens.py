@@ -20,6 +20,7 @@ class Token(object):
         self.id = id  # ID in the TokenSet
         self.value: int = value  # For single-byte tokens
         self.string: bytes = string
+        self.length = len(self.string)
         self.mandatory: bool = mandatory
         # The longest other token in the token
         self.suffix_token: Self = None
@@ -27,10 +28,6 @@ class Token(object):
 
     def __repr__(self):
         return repr(self.string)
-
-    @property
-    def length(self):
-        return len(self.string)
 
     def as_json(self):
         assert self.string is not None
