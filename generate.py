@@ -13,44 +13,45 @@ from util import TextFile, ChunkProvider
 
 def get_tokenizers(data: ChunkProvider, ntokens: int) -> Iterable[Tokenizer]:
     top_bytes = top_substrings.get_top_bytes(data)
-    top_str = top_substrings.get_top_substrings(data, ntokens + ntokens // 2)
+    top_str = top_substrings.get_top_substrings(data, 2 * ntokens)
 
 
-    token_set = tokens.build_bits_tokenset()
-    for b, _ in top_bytes:
-        if token_set.ntokens >= ntokens:
-            break
-        token_set.add_byte(b)
-    token_set.sort()
+    if ntokens < 64:
+        token_set = tokens.build_bits_tokenset()
+        for b, _ in top_bytes:
+            if token_set.ntokens >= ntokens:
+                break
+            token_set.add_byte(b)
+        token_set.sort()
 
-    tokenizer = OptimalTokenizer(token_set)
-    yield tokenizer
-
-
-    if ntokens < 8:
-        return
+        tokenizer = OptimalTokenizer(token_set)
+        yield tokenizer
 
 
-    token_set = tokens.build_bits_tokenset()
-    for s, _ in top_str:
-        if token_set.ntokens >= ntokens:
-            break
-        token_set.add_string(s)
-    token_set.sort()
-
-    tokenizer = OptimalTokenizer(token_set)
-    yield tokenizer
+        if ntokens < 8:
+            return
 
 
-    token_set = tokens.build_bits_tokenset()
-    for b, _ in top_bytes:
-        token_set.add_byte(b)
-    for s, _ in top_str:
-        token_set.add_string(s)
-    prune_token_set(token_set, data, ntokens)
+        token_set = tokens.build_bits_tokenset()
+        for s, _ in top_str:
+            if token_set.ntokens >= ntokens:
+                break
+            token_set.add_string(s)
+        token_set.sort()
 
-    tokenizer = OptimalTokenizer(token_set)
-    yield tokenizer
+        tokenizer = OptimalTokenizer(token_set)
+        yield tokenizer
+
+
+        token_set = tokens.build_bits_tokenset()
+        for b, _ in top_bytes:
+            token_set.add_byte(b)
+        for s, _ in top_str:
+            token_set.add_string(s)
+        prune_token_set(token_set, data, ntokens)
+
+        tokenizer = OptimalTokenizer(token_set)
+        yield tokenizer
 
 
     if ntokens <= 16:
@@ -103,6 +104,7 @@ def generate(data_file: str, ntokens: int, output_file: str):
             best_stats = stats
             best_tokenizer = tokenizer
 
+    best_stats.token_set.sort()
     tokenizer_json = {
         "tokens": best_stats.token_set.as_json(),
         "stats": best_stats.as_json(),

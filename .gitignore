@@ -1,2 +1,7 @@
-/target
 __pycache__
+/target
+Cargo.lock
+code.txt
+data.txt
+data20.txt
+texts/

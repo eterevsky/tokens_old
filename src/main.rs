@@ -1,6 +1,8 @@
 use std::env;
 use std::fs::File;
-use std::io::{self, Read, BufReader, Seek};
+use std::io::{self, Read, BufReader, BufRead, Seek};
+use std::collections::HashMap;
+
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -12,8 +14,9 @@ fn main() -> io::Result<()> {
     let file_path = &args[1];
     let file = File::open(file_path)?;
     let reader = BufReader::new(file);
-    let bytes = reader.bytes().map(|r| r.unwrap());
-    count_bytes(bytes);
+    // let bytes = reader.bytes().map(|r| r.unwrap());
+    // count_bytes(bytes);
+    count_chars(reader);
 
     Ok(())
 }
@@ -30,6 +33,28 @@ fn count_bytes<I: IntoIterator<Item = u8>>(bytes: I) {
     }
 }
 
-fn top_substrings<B: Read + Seek>(reader: B, max_strings: usize) -> Vec<(Vec<u8>, usize) {
+fn count_chars<R: Read>(reader: BufReader<R>) {
+    let mut char_count = HashMap::new();
+
+    for line_result in reader.lines() {
+        match line_result {
+            Ok(line) => {
+                for character in line.chars() {
+                    // Increment the count for this character in the HashMap
+                    *char_count.entry(character).or_insert(0) += 1;
+                }
+            },
+            Err(error) => {
+                eprintln!("Error reading line: {}", error);
+            }
+        }
+    }
+
+    for i in 0xE000..0xE020 {
+        let character = char::from_u32(i).unwrap();
+        if let Some(count) = char_count.get(&character) {
+            println!("'{}' ({:x}): {}", character, i, *count);
+        }
+    }
 
 }
