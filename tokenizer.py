@@ -3,7 +3,6 @@ from itertools import islice
 import math
 from typing import Self, Iterable
 from operator import itemgetter
-import statistics
 
 from tokens import TokenSet, Token
 import tokens
@@ -245,7 +244,7 @@ class DynState(object):
         return f"DynState({self.cost}, first={self.first_token}, last={self.last_token})"
 
 
-class OptimalTokenizer(Tokenizer):
+class OptimalTokenizerOld(Tokenizer):
     def __init__(self, token_set: TokenSet):
         super().__init__(token_set)
         self.token_set.compute_suffix_tokens()
@@ -359,6 +358,49 @@ class OptimalTokenizer(Tokenizer):
         # print(statistics.median(state_len), statistics.mean(state_len), max(state_len))
 
 
+class OptimalTokenizer(Tokenizer):
+    def __init__(self, token_set: TokenSet):
+        super().__init__(token_set)
+        self.token_set.compute_suffix_tokens()
+        self._suffix_scanner = SuffixScanner(token_set)
+        self._max_token_length = max(t.length for t in self.token_set.tokens)
+        self._literal_cost = 3 if self.hex_fallback else 8
+
+    def tokenize(self, data: Iterable[int]) -> Iterable[Token]:
+        cost = [0]
+        last_token = [None]
+
+        for token in self._suffix_scanner.scan(data):
+            best_cost = INF
+            best_token = None
+
+            while token is not None:
+                if token.is_literal:
+                    new_cost = cost[-token.length] + self._literal_cost
+                else:
+                    new_cost = cost[-token.length] + 1
+                if new_cost < best_cost:
+                    best_cost = new_cost
+                    best_token = token
+                token = token.suffix_token
+
+            cost.append(best_cost)
+            last_token.append(best_token)
+
+        tokens = []
+        i = len(last_token) - 1
+        while i > 0:
+            token = last_token[i]
+            if token.is_literal:
+                tokens.extend(reversed(self.fallback_tokens[token.value]))
+            else:
+                tokens.append(token)
+            i -= token.length
+
+        assert i == 0
+        return reversed(tokens)
+
+
 def build_from_json(save) -> Tokenizer:
     if save.get("config", {}).get("fallback16", True):
         token_set = tokens.build_hex_tokenset()
@@ -373,3 +415,4 @@ def build_from_json(save) -> Tokenizer:
         token_set.add_string(token_bytes)
 
     return OptimalTokenizer(token_set)
+

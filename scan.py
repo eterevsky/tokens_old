@@ -62,23 +62,11 @@ def scan(tokens_json, filename):
      tokenizer = build_from_json(tokens_dict)
      data = ChunkProvider(TextFile(filename))
      stats = tokenizer.tokenize_chunks(data)
-     # cProfile.run('stats = tokenizer.tokenize_chunks(data)')
      stats.report(show_tokens=False)
 
 
-# if __name__ == "__main__":
-#     if len(sys.argv) != 3:
-#         print("Usage:\npython scan.py <tokens json> <data file>")
-#         sys.exit(1)
-#     scan(sys.argv[1], sys.argv[2])
-#     # top_strings(sys.argv[1])
-
-
-def main():
+if __name__ == "__main__":
     if len(sys.argv) != 3:
         print("Usage:\npython scan.py <tokens json> <data file>")
         sys.exit(1)
     scan(sys.argv[1], sys.argv[2])
-
-
-cProfile.run('main()')
