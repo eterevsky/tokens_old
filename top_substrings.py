@@ -17,13 +17,17 @@ def get_top_bytes(data: ChunkProvider) -> list[tuple[bytes, int]]:
     return pairs
 
 
-def sort_and_prune(counts: dict[bytes, int], nstrings: int) -> list[tuple[bytes, int]]:
+def sort_and_prune(
+    counts: dict[bytes, int], nstrings: int
+) -> list[tuple[bytes, int]]:
     pairs = [(i, count) for i, count in counts.items()]
     pairs.sort(key=itemgetter(1), reverse=True)
     return pairs[:nstrings]
 
 
-def get_top_substrings(data: ChunkProvider, nstrings: int) -> list[tuple[bytes, int]]:
+def get_top_substrings(
+    data: ChunkProvider, nstrings: int
+) -> list[tuple[bytes, int]]:
     counts: dict[bytes, int] = {}
 
     for byte, count in get_top_bytes(data):
@@ -46,8 +50,12 @@ def get_top_substrings(data: ChunkProvider, nstrings: int) -> list[tuple[bytes, 
         for chunk in data.chunks():
             scanner.reset()
             for byte in chunk:
-                if scanner.current_state.token is not None:
+                if (
+                    scanner.current_state.token is not None
+                    and not scanner.current_state.token.is_literal
+                ):
                     token_string = scanner.current_state.token.string
+                    # print(scanner.current_state.token)
                     assert len(token_string) == length - 1
                     string = token_string + bytes([byte])
                     counts[string] = counts.get(string, 0) + 1

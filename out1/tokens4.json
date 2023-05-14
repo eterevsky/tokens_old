@@ -1,0 +1,13 @@
+{
+  "tokens": ["\u0011", "\u0012", " ", "e"],
+  "stats": {
+    "ntokens": 4,
+    "scanned_bytes": 720320,
+    "used_tokens": 4,
+    "total_tokens": 4396797,
+    "bytes_per_token": 0.16382835050151281,
+    "bits_per_byte": 12.207899266992447
+  },
+  "config": {"fallback16": false},
+  "optimizer": {"fallback16": false, "type": "top_bytes"}
+}

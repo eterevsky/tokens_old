@@ -2,6 +2,7 @@ from tokenizer import OptimalTokenizer
 from tokens import TokenSet, build_hex_tokenset
 from top_substrings import get_top_substrings
 from util import ChunkProvider
+from operator import itemgetter
 
 
 def build_top_substrings_token_set(data: ChunkProvider, ntokens: int) -> TokenSet:
@@ -62,3 +63,43 @@ def prune_token_set(token_set: TokenSet, data: ChunkProvider, ntokens):
         prev_stats = best_stats
 
     return token_set
+
+
+def prune_token_set_simple(token_set: TokenSet, data: ChunkProvider, ntokens):
+    print("Starting with", token_set.ntokens, "tokens")
+
+    tokenizer = OptimalTokenizer(token_set)
+    initial_stats = tokenizer.tokenize_chunks(data)
+    unused_tokens = []
+    for i, token in enumerate(token_set.tokens):
+        if initial_stats.count[i] == 0 and not token.mandatory:
+            unused_tokens.append(token)
+
+    print("Removing", len(unused_tokens), "unused tokens")
+    for token in unused_tokens:
+        token_set.remove_token(token)
+
+    print("Initial total:", initial_stats.total_tokens)
+    prev_stats = initial_stats
+
+    while token_set.ntokens > ntokens:
+        tokenizer = OptimalTokenizer(token_set)
+        stats = tokenizer.tokenize_chunks(data)
+        print("Total tokens:", stats.total_tokens, "(+", stats.total_tokens - prev_stats.total_tokens)
+
+        pairs = [(i, count) for i, count in enumerate(stats.count)]
+        pairs.sort(key=itemgetter(1))
+
+        for idx, _ in pairs:
+            token = token_set.tokens[idx]
+            if not token.mandatory:
+                break
+
+        print("Removing token", token, "with", stats.count[idx], "appearances")
+
+        token_set.remove_token(token)
+        prev_stats = stats
+
+    return token_set
+
+

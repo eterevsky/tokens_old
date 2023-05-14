@@ -138,7 +138,10 @@ class TokenSet(object):
     def add_string(self, string: bytes):
         if string in self.tokens_by_string:
             return
-        token = Token(None, None, string)
+        value = None
+        if len(string) == 1:
+            value = string[0]
+        token = Token(None, value, string)
         self.add_token(token)
 
     def has_bytes(self) -> bool:
