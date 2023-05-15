@@ -3,7 +3,8 @@
 from typing import Iterable
 import sys
 
-from optimizer import prune_token_set, prune_token_set_simple
+from filters import FilterCaps, FilterWords
+from optimizer import prune_token_set, prune_token_set_simple, optimize_bpe
 import pjson
 import tokens
 from tokenizer import Tokenizer, TokenStats, OptimalTokenizer
@@ -31,75 +32,100 @@ def add_strings(
 
 
 def get_tokenizers(data: ChunkProvider, ntokens: int) -> Iterable[Tokenizer]:
-    top_bytes = top_substrings.get_top_bytes(data)
-    top_str = top_substrings.get_top_substrings(data, 10 * ntokens)
+    for filters_config in ([], ["caps"], ["caps", "words"]):
+        filters = []
+        for f in filters_config:
+            print(f)
+            if f == "caps":
+                filters.append(FilterCaps())
+            elif f == "words":
+                filters.append(FilterWords())
+            else:
+                assert False
 
-    token_set = tokens.build_bits_tokenset()
-    add_strings(token_set, top_bytes, ntokens)
-    add_strings(token_set, top_str, ntokens)
-    tokenizer = OptimalTokenizer(token_set)
-    yield tokenizer, {"fallback16": False, "type": "top_bytes"}
+        top_bytes = top_substrings.get_top_bytes(data, filters)
+        top_str = top_substrings.get_top_substrings(data, 10 * ntokens, filters)
 
-    token_set = tokens.build_bits_tokenset()
-    add_strings(token_set, top_str, ntokens)
-    tokenizer = OptimalTokenizer(token_set)
-    yield tokenizer, {"fallback16": False, "type": "top_strings"}
-
-    if ntokens >= 17:
-        token_set = tokens.build_hex_tokenset()
+        token_set = tokens.build_bits_tokenset()
         add_strings(token_set, top_bytes, ntokens)
         add_strings(token_set, top_str, ntokens)
-        tokenizer = OptimalTokenizer(token_set)
-        yield tokenizer, {"fallback16": True, "type": "top_bytes"}
+        tokenizer = OptimalTokenizer(token_set, filters)
+        yield tokenizer, {"fallback16": False, "type": "top_bytes", "filters": filters_config}
 
-        token_set = tokens.build_hex_tokenset()
+        token_set = tokens.build_bits_tokenset()
         add_strings(token_set, top_str, ntokens)
-        tokenizer = OptimalTokenizer(token_set)
-        yield tokenizer, {"fallback16": True, "type": "top_strings"}
+        tokenizer = OptimalTokenizer(token_set, filters)
+        yield tokenizer, {"fallback16": False, "type": "top_strings", "filters": filters_config}
 
-    for init_mult in (1.5, 2, 3, 4):
-        init_strings = round(ntokens * init_mult)
-        for fallback16 in (False, True):
-            if ntokens >= 64 and not fallback16:
-                continue
-            if ntokens <= 16 and fallback16:
-                continue
+        token_set = tokens.build_bits_tokenset()
+        optimize_bpe(token_set, data, ntokens, literal_cost=8, filters=filters)
+        tokenizer = OptimalTokenizer(token_set, filters)
+        yield tokenizer, {"fallback16": False, "type": "bpe", "filters": filters_config}
 
-            token_set = (
-                tokens.build_hex_tokenset()
-                if fallback16
-                else tokens.build_bits_tokenset()
-            )
+        if ntokens >= 17:
+            token_set = tokens.build_hex_tokenset()
+            add_strings(token_set, top_bytes, ntokens)
+            add_strings(token_set, top_str, ntokens)
+            tokenizer = OptimalTokenizer(token_set, filters)
+            yield tokenizer, {"fallback16": True, "type": "top_bytes", "filters": filters_config}
 
-            add_strings(token_set, top_str, None, init_strings)
-            add_strings(token_set, top_bytes, None, init_strings)
-            init_tokens = token_set.ntokens
-            prune_token_set_simple(token_set, data, ntokens)
-            tokenizer = OptimalTokenizer(token_set)
-            yield tokenizer, {
-                "fallback16": fallback16,
-                "type": "prune_last_token",
-                "init_mult": init_mult,
-                "init_tokens": init_tokens,
-            }
+            token_set = tokens.build_hex_tokenset()
+            add_strings(token_set, top_str, ntokens)
+            tokenizer = OptimalTokenizer(token_set, filters)
+            yield tokenizer, {"fallback16": True, "type": "top_strings", "filters": filters_config}
 
-            token_set = (
-                tokens.build_hex_tokenset()
-                if fallback16
-                else tokens.build_bits_tokenset()
-            )
+            token_set = tokens.build_hex_tokenset()
+            optimize_bpe(token_set, data, ntokens, literal_cost=3, filters=filters)
+            tokenizer = OptimalTokenizer(token_set, filters)
+            yield tokenizer, {"fallback16": True, "type": "bpe", "filters": filters_config}
 
-            add_strings(token_set, top_str, None, init_strings)
-            add_strings(token_set, top_bytes, None, init_strings)
-            init_tokens = token_set.ntokens
-            prune_token_set(token_set, data, ntokens)
-            tokenizer = OptimalTokenizer(token_set)
-            yield tokenizer, {
-                "fallback16": fallback16,
-                "type": "prune_useless_token",
-                "init_mult": init_mult,
-                "init_tokens": init_tokens,
-            }
+        for init_mult in (2, 4):
+            init_strings = round(ntokens * init_mult)
+            for fallback16 in (False, True):
+                if ntokens > 64 and not fallback16:
+                    continue
+                if ntokens <= 16 and fallback16:
+                    continue
+
+                token_set = (
+                    tokens.build_hex_tokenset()
+                    if fallback16
+                    else tokens.build_bits_tokenset()
+                )
+
+                add_strings(token_set, top_str, None, init_strings)
+                add_strings(token_set, top_bytes, None, init_strings)
+                init_tokens = token_set.ntokens
+                prune_token_set_simple(token_set, data, ntokens, filters)
+                tokenizer = OptimalTokenizer(token_set, filters)
+                yield tokenizer, {
+                    "fallback16": fallback16,
+                    "type": "prune_last_token",
+                    "init_mult": init_mult,
+                    "init_tokens": init_tokens,
+                    "filters": filters_config,
+                }
+
+                for top_to_remove in (8,):
+                    token_set = (
+                        tokens.build_hex_tokenset()
+                        if fallback16
+                        else tokens.build_bits_tokenset()
+                    )
+
+                    add_strings(token_set, top_str, None, init_strings)
+                    add_strings(token_set, top_bytes, None, init_strings)
+                    init_tokens = token_set.ntokens
+                    prune_token_set(token_set, data, ntokens, filters, top_to_remove)
+                    tokenizer = OptimalTokenizer(token_set, filters)
+                    yield tokenizer, {
+                        "fallback16": fallback16,
+                        "type": "prune_useless_token",
+                        "init_mult": init_mult,
+                        "init_tokens": init_tokens,
+                        "top_to_remove": top_to_remove,
+                        "filters": filters_config,
+                    }
 
 
 def top_strings(data: ChunkProvider, ntokens: int) -> Iterable[Tokenizer]:
@@ -122,6 +148,8 @@ def generate(data_file: str, ntokens: int, output_file: str):
     best_optimizer = None
     for tokenizer, optimizer in get_tokenizers(data, ntokens):
         stats = tokenizer.tokenize_chunks(data)
+        print()
+        print(optimizer)
         stats.report(show_tokens=False)
         print()
         if best_stats is None or stats.total_tokens < best_stats.total_tokens:

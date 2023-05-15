@@ -1,14 +1,18 @@
 from operator import itemgetter
 from typing import Iterable
 
+from filters import Filter
 from tokens import Token, TokenSet
 from tokenizer import SuffixScanner
 from util import ChunkProvider
 
 
-def get_top_bytes(data: ChunkProvider) -> list[tuple[bytes, int]]:
+def get_top_bytes(data: ChunkProvider, filters: list[Filter]) -> list[tuple[bytes, int]]:
     counts = [0] * 256
-    for chunk in data.chunks():
+    for string in data.chunks_str():
+        for filter in filters:
+            string = filter.encode(string)
+        chunk = string.encode("utf-8")
         for byte in chunk:
             counts[byte] += 1
 
@@ -26,11 +30,11 @@ def sort_and_prune(
 
 
 def get_top_substrings(
-    data: ChunkProvider, nstrings: int
+    data: ChunkProvider, nstrings: int, filters: list[Filter]
 ) -> list[tuple[bytes, int]]:
     counts: dict[bytes, int] = {}
 
-    for byte, count in get_top_bytes(data):
+    for byte, count in get_top_bytes(data, filters):
         if count > 0:
             counts[bytes([byte])] = count
 
@@ -47,7 +51,10 @@ def get_top_substrings(
 
         scanner = SuffixScanner(prefixes)
 
-        for chunk in data.chunks():
+        for string in data.chunks_str():
+            for filter in filters:
+                string = filter.encode(string)
+            chunk = string.encode("utf-8")
             scanner.reset()
             for byte in chunk:
                 if (

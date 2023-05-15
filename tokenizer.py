@@ -7,6 +7,7 @@ from operator import itemgetter
 from tokens import TokenSet, Token
 import tokens
 from util import ChunkProvider, INF
+from filters import Filter
 
 
 class ScannerState(object):
@@ -126,14 +127,20 @@ POWERS2 = [128, 64, 32, 16, 8, 4, 2, 1]
 
 
 class Tokenizer(object):
-    def __init__(self, token_set: TokenSet):
+    def __init__(self, token_set: TokenSet, filters: list[Filter]):
         assert token_set.has_bits() or token_set.has_hex()
         self.hex_fallback = token_set.has_hex()
         self.token_set: TokenSet = token_set
         self.fallback_tokens: list[list[Token]] = self._make_fallbacks()
+        self.filters = filters
 
     def tokenize(self, stream: Iterable[int]) -> Iterable[Token]:
         pass
+
+    def tokenize_str(self, string: str) -> Iterable[Token]:
+        for f in self.filters:
+            string = f.encode(string)
+        return self.tokenize(string.encode("utf-8"))
 
     def _make_fallbacks(self) -> list[list[Token]]:
         fallbacks = []
@@ -153,31 +160,28 @@ class Tokenizer(object):
         return fallbacks
 
     def tokenize_and_count(
-        self, stream: Iterable[int], stats: TokenStats = None
+        self, string: str, stats: TokenStats = None
     ) -> TokenStats:
         if stats is None:
             stats = TokenStats(self.token_set)
 
-        def count_input(stream):
-            for b in stream:
-                stats.count_byte(b)
-                yield b
+        stats.input_size += len(string.encode("utf-8"))
 
-        for token in self.tokenize(count_input(stream)):
+        for token in self.tokenize_str(string):
             stats.count_token(token)
 
         return stats
 
     def tokenize_chunks(self, data: ChunkProvider) -> TokenStats:
         stats = TokenStats(self.token_set)
-        for chunk in data.chunks():
+        for chunk in data.chunks_str():
             self.tokenize_and_count(chunk, stats)
         return stats
 
 
 class TokenizerBytes(Tokenizer):
-    def __init__(self, token_set: TokenSet):
-        super().__init__(token_set)
+    def __init__(self, token_set: TokenSet, filters: list[Filter]):
+        super().__init__(token_set, filters)
 
     def tokenize(self, stream: Iterable[int]) -> Iterable[Token]:
         for b in stream:
@@ -193,8 +197,8 @@ PARTIAL = "partial"
 
 
 class GreedyTokenizer(Tokenizer):
-    def __init__(self, token_set: TokenSet):
-        super().__init__(token_set)
+    def __init__(self, token_set: TokenSet, filters: list[Filter]):
+        super().__init__(token_set, filters)
         self._prefix_to_token = {}
 
         for token in token_set.tokens:
@@ -245,8 +249,8 @@ class DynState(object):
 
 
 class OptimalTokenizerOld(Tokenizer):
-    def __init__(self, token_set: TokenSet):
-        super().__init__(token_set)
+    def __init__(self, token_set: TokenSet, filters: list[Filter]):
+        super().__init__(token_set, filters)
         self.token_set.compute_suffix_tokens()
         self._suffix_scanner = SuffixScanner(token_set)
         self._max_token_length = max(t.length for t in self.token_set.tokens)
@@ -359,14 +363,14 @@ class OptimalTokenizerOld(Tokenizer):
 
 
 class OptimalTokenizer(Tokenizer):
-    def __init__(self, token_set: TokenSet):
-        super().__init__(token_set)
+    def __init__(self, token_set: TokenSet, filters: list[Filter]):
+        super().__init__(token_set, filters)
         self.token_set.compute_suffix_tokens()
         self._suffix_scanner = SuffixScanner(token_set)
         self._max_token_length = max(t.length for t in self.token_set.tokens)
         self._literal_cost = 3 if self.hex_fallback else 8
 
-    def tokenize(self, data: Iterable[int]) -> Iterable[Token]:
+    def tokenize(self, data: Iterable[int], expand_literals=True) -> Iterable[Token]:
         cost = [0]
         last_token = [None]
 
@@ -391,7 +395,7 @@ class OptimalTokenizer(Tokenizer):
         i = len(last_token) - 1
         while i > 0:
             token = last_token[i]
-            if token.is_literal:
+            if token.is_literal and expand_literals:
                 tokens.extend(reversed(self.fallback_tokens[token.value]))
             else:
                 tokens.append(token)

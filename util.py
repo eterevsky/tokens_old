@@ -29,12 +29,15 @@ class TextFile(object):
             flags=mmap.MAP_PRIVATE,
             prot=mmap.PROT_READ,
         )
+        self._all_str = None
 
     def __del__(self):
         self.file.close()
 
     def all_str(self) -> str:
-        return self.data.decode("utf-8")
+        if self._all_str is None:
+            self._all_str = bytes(self.data).decode("utf-8")
+        return self._all_str
 
     def all_bytes(self) -> Iterable[bytes]:
         return mmap_iterator(self.data)
@@ -91,3 +94,16 @@ class ChunkProvider(object):
 
         for _ in range(self._nchunks):
             yield self._file.sample_bytes(self._chunk_size)
+
+    def chunks_str(self) -> Iterable[str]:
+        if (
+            self._nchunks <= 0
+            or self._chunk_size <= 0
+            or self._file.length <= self._nchunks * self._chunk_size
+        ):
+            yield self._file.all_str()
+            return
+
+        for _ in range(self._nchunks):
+            yield self._file.sample_str(self._chunk_size)
+

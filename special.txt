@@ -5,3 +5,4 @@
 \uE013  \x13  -- end of the fragment
 \uE014  \x14  -- capitalize the next word
 \uE015  \x15  -- next word in all caps
+\x16          -- end of the word

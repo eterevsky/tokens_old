@@ -1,0 +1,13 @@
+{
+  "tokens": ["\u0011", "\u0012", "\u0016", "a", "e", "i", "o", "t"],
+  "stats": {
+    "ntokens": 8,
+    "scanned_bytes": 720320,
+    "used_tokens": 8,
+    "total_tokens": 3432933,
+    "bytes_per_token": 0.2098264079141655,
+    "bits_per_byte": 14.297533040870723
+  },
+  "config": {"fallback16": false},
+  "optimizer": {"fallback16": false, "type": "top_bytes", "filters": ["caps", "words"]}
+}
