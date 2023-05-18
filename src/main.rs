@@ -164,14 +164,20 @@ impl TokenSet {
             tokens: []
         };
 
-        for token in self.tokens.iter() {
-            if token.is_literal {
-                continue;
-            }
+        let mut token_strs = vec![];
 
-            let value: json::JsonValue = match std::str::from_utf8(&token.string) {
+        for token in self.tokens.iter() {
+            if !token.is_literal {
+                token_strs.push(token.string.clone());
+            }
+        }
+
+        token_strs.sort_unstable();
+
+        for token_str in token_strs.iter() {
+            let value: json::JsonValue = match std::str::from_utf8(&token_str) {
                 Ok(s) => s.into(),
-                Err(_) => token.string.as_slice().into(),
+                Err(_) => token_str.as_slice().into(),
             };
 
             out["tokens"].push(value).unwrap();
@@ -559,24 +565,24 @@ fn optimize_bpe(
     ntokens: usize,
     filename: &str,
     splits: &[usize],
-) -> TokenSet {
+) -> (TokenSet, TokenStats) {
     let mut token_set = token_set.clone();
     let mut prev_stats = None;
+    let mut initial_stats = TokenStats::new(&token_set);
+
     loop {
-        let stats = match prev_stats {
+        initial_stats = match prev_stats {
             Some(s) => s,
             None => tokenize_file(&token_set, filename, splits)
         };
-
-        let initial_cost = stats.cost;
 
         let mut top_literal = 0;
         let mut top_literal_count = 0;
 
         for i in 0..256 {
-            if stats.token_count[i] > top_literal_count {
+            if initial_stats.token_count[i] > top_literal_count {
                 top_literal = i;
-                top_literal_count = stats.token_count[i];
+                top_literal_count = initial_stats.token_count[i];
             }
         }
 
@@ -587,10 +593,10 @@ fn optimize_bpe(
 
         let mut top_pair = 0;
         let mut top_pair_count = 0;
-        for ipair in 0..stats.pair_count.len() {
-            if stats.pair_count[ipair] > top_pair_count {
+        for ipair in 0..initial_stats.pair_count.len() {
+            if initial_stats.pair_count[ipair] > top_pair_count {
                 top_pair = ipair;
-                top_pair_count = stats.pair_count[ipair];
+                top_pair_count = initial_stats.pair_count[ipair];
             }
         }
 
@@ -614,7 +620,7 @@ fn optimize_bpe(
         new_token_set.add_token(&new_token_str);
         prev_stats = None;
 
-        println!("{} Adding token {}", initial_cost, format_token(&new_token_str));
+        println!("{} Adding token {}", initial_stats.cost, format_token(&new_token_str));
 
         // match String::from_utf8(new_token_str.clone()) {
         //     Ok(string) => {
@@ -644,7 +650,7 @@ fn optimize_bpe(
 
                 let stats = tokenize_file(&new_token_set, filename, splits);
 
-                if stats.cost < initial_cost {
+                if stats.cost < initial_stats.cost {
                     // Found a token to remove.
                     found = true;
                     prev_stats = Some(stats);
@@ -663,7 +669,7 @@ fn optimize_bpe(
         token_set = new_token_set;
     }
 
-    token_set
+    (token_set, initial_stats)
 }
 
 fn split_into_chunks(filename: &str, chunk_size: usize) -> Vec<usize> {
@@ -728,7 +734,7 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
-    let mut token_set =
+    let token_set =
         if args.input.is_empty() {
             TokenSet::build_with_hex_literals()
         } else {
@@ -764,14 +770,17 @@ fn main() {
     let filename = args.data.as_str();
     let splits = split_into_chunks(filename, CHUNK_SIZE);
 
-    let token_set = optimize_bpe(&token_set, args.ntokens, filename, &splits);
+    let (token_set, token_stats) = optimize_bpe(&token_set, args.ntokens, filename, &splits);
 
-    let tokens_json = token_set.to_json();
-    let tokens_json_str = json::stringify(tokens_json);
+    let mut tokens_json = token_set.to_json();
+
+    tokens_json["stats"]["ntokens"] = (token_set.ntokens - 256).into();
+    tokens_json["stats"]["scanned_bytes"] = token_stats.scanned_bytes.into();
+    tokens_json["stats"]["total_tokens"] = token_stats.cost.into();
+    tokens_json["stats"]["bytes_per_token"] = (token_stats.scanned_bytes as f64 / token_stats.cost as f64).into();
+
+    let tokens_json_str = json::stringify_pretty(tokens_json, 2);
     println!("{}", &tokens_json_str);
-
-    let stats = tokenize_file(&token_set, filename, &splits);
-    println!("Cost: {}", stats.cost);
 
     if !args.output.is_empty() {
         std::fs::write(args.output, &tokens_json_str).unwrap();
