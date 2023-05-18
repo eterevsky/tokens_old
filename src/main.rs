@@ -33,15 +33,17 @@ impl Stats {
 struct Token {
     string: Vec<u8>,
     is_literal: bool,
+    is_mandatory: bool,
     // Index of the longest other token which is a suffix of this one.
     suffix: Option<usize>,
 }
 
 impl Token {
-    fn new(string: &[u8], is_literal: bool) -> Self {
+    fn new(string: &[u8], is_literal: bool, is_mandatory: bool) -> Self {
         Token {
             string: string.to_vec(),
             is_literal,
+            is_mandatory,
             suffix: None,
         }
     }
@@ -56,7 +58,19 @@ struct TokenSet {
 }
 
 impl TokenSet {
-    fn add_token(&mut self, string: &[u8], is_literal: bool) {
+    fn add_mandatory_token(&mut self, string: &[u8]) {
+        if let Some(&existing) = self.tokens_by_string.get(string) {
+            let existing = &self.tokens[existing];
+            assert!(existing.is_literal);
+        }
+        let index = self.tokens.len();
+        let token = Token::new(string, false, true);
+        self.tokens_by_string.insert(token.string.clone(), index);
+        self.tokens.push(token);
+        self.ntokens += 1;
+    }
+
+    fn add_token(&mut self, string: &[u8]) {
         if let Some(&existing) = self.tokens_by_string.get(string) {
             let existing = &self.tokens[existing];
             if !existing.is_literal {
@@ -65,10 +79,29 @@ impl TokenSet {
         }
 
         let index = self.tokens.len();
-        let token = Token::new(string, is_literal);
+        let token = Token::new(string, false, false);
         self.tokens_by_string.insert(token.string.clone(), index);
         self.tokens.push(token);
         self.ntokens += 1;
+    }
+
+    fn add_literal(&mut self, value: u8) {
+        let token = Token::new(&[value], true, false);
+        self.tokens_by_string.insert(token.string.clone(), self.tokens.len());
+        self.tokens.push(token);
+        self.ntokens += 1;
+    }
+
+    fn remove_token(&mut self, token_id: usize) {
+        assert!(token_id >= 256);  // Can't remove literals
+        self.tokens.remove(token_id);
+        self.ntokens -= 1;
+
+        self.tokens_by_string.clear();
+        for i in 0..self.ntokens {
+            let token = &self.tokens[i];
+            self.tokens_by_string.insert(token.string.clone(), i);
+        }
     }
 
     fn build_with_hex_literals() -> Self {
@@ -80,14 +113,14 @@ impl TokenSet {
         };
 
         for i in 0..=255 {
-            token_set.add_token(&[i], true);
+            token_set.add_literal(i);
         }
-        token_set.add_token(&[0x10], false);
+        token_set.add_mandatory_token(&[0x10]);
         for i in ('0' as u8)..=('9' as u8) {
-            token_set.add_token(&[i], false);
+            token_set.add_mandatory_token(&[i]);
         }
         for i in ('a' as u8)..=('f' as u8) {
-            token_set.add_token(&[i], false);
+            token_set.add_mandatory_token(&[i]);
         }
 
         token_set.ntokens = token_set.tokens.len();
@@ -104,10 +137,10 @@ impl TokenSet {
         };
 
         for i in 0..=255 {
-            token_set.add_token(&[i], true);
+            token_set.add_literal(i);
         }
-        token_set.add_token(&[0x11], false);
-        token_set.add_token(&[0x12], false);
+        token_set.add_mandatory_token(&[0x11]);
+        token_set.add_mandatory_token(&[0x12]);
 
         token_set.ntokens = token_set.tokens.len();
 
@@ -502,7 +535,9 @@ fn tokenize_file(token_set: &TokenSet, filename: &str, splits: &[usize]) -> Toke
                 );
             }
         }
-        eprintln!();
+        if splits[splits.len() - 1] > 100000000 {
+            eprintln!();
+        }
 
         while !join_handles.is_empty() {
             join_handles.pop().unwrap().join().unwrap();
@@ -512,6 +547,13 @@ fn tokenize_file(token_set: &TokenSet, filename: &str, splits: &[usize]) -> Toke
     total_stats
 }
 
+fn format_token(s: &[u8]) -> String {
+    match String::from_utf8(s.to_vec()) {
+        Ok(string) => format!("{:?}", string),
+        Err(_) => format!("{:?}", s)
+    }
+}
+
 fn optimize_bpe(
     token_set: &TokenSet,
     ntokens: usize,
@@ -519,9 +561,14 @@ fn optimize_bpe(
     splits: &[usize],
 ) -> TokenSet {
     let mut token_set = token_set.clone();
-    while token_set.ntokens < 256 + ntokens {
-            // loop {
-        let stats = tokenize_file(&token_set, filename, splits);
+    let mut prev_stats = None;
+    loop {
+        let stats = match prev_stats {
+            Some(s) => s,
+            None => tokenize_file(&token_set, filename, splits)
+        };
+
+        let initial_cost = stats.cost;
 
         let mut top_literal = 0;
         let mut top_literal_count = 0;
@@ -533,10 +580,10 @@ fn optimize_bpe(
             }
         }
 
-        println!(
-            "Top literal: {} with count {}",
-            top_literal, top_literal_count
-        );
+        // println!(
+        //     "Top literal: {} with count {}",
+        //     top_literal, top_literal_count
+        // );
 
         let mut top_pair = 0;
         let mut top_pair_count = 0;
@@ -553,9 +600,9 @@ fn optimize_bpe(
         let mut token_str = token_set.tokens[ifirst].string.clone();
         token_str.extend(token_set.tokens[isecond].string.clone());
 
-        println!(
-            "Top pair: {:?} with count {}", &token_str, top_pair_count
-        );
+        // println!(
+        //     "Top pair: {} with count {}", format_token(&token_str), top_pair_count
+        // );
 
         let new_token_str = if top_literal_count > top_pair_count {
             vec![top_literal as u8]
@@ -564,20 +611,54 @@ fn optimize_bpe(
         };
 
         let mut new_token_set = token_set.clone();
-        new_token_set.add_token(&new_token_str, false);
+        new_token_set.add_token(&new_token_str);
+        prev_stats = None;
 
-        match String::from_utf8(new_token_str.clone()) {
-            Ok(string) => {
-                println!("Adding token {:?}", string)
+        println!("{} Adding token {}", initial_cost, format_token(&new_token_str));
+
+        // match String::from_utf8(new_token_str.clone()) {
+        //     Ok(string) => {
+        //     }
+        //     Err(_) => {
+        //         println!("Adding token {:?}", &new_token_str)
+        //     }
+        // }
+
+        if new_token_set.ntokens > 256 + ntokens {
+            let stats = tokenize_file(&new_token_set, filename, splits);
+            let mut token_ids: Vec<usize> = (0..new_token_set.tokens.len()).collect();
+            token_ids.sort_unstable_by_key(|&i| stats.token_count[i]);
+
+            let mut found = false;
+            let mut tries = 0;
+
+            for &token_id_to_remove in token_ids.iter() {
+                let token_to_remove = &new_token_set.tokens[token_id_to_remove];
+                if token_to_remove.is_literal || token_to_remove.is_mandatory {
+                    continue
+                }
+                tries += 1;
+                let token_str = token_to_remove.string.clone();
+
+                new_token_set.remove_token(token_id_to_remove);
+
+                let stats = tokenize_file(&new_token_set, filename, splits);
+
+                if stats.cost < initial_cost {
+                    // Found a token to remove.
+                    found = true;
+                    prev_stats = Some(stats);
+                    println!("Removing token {} after {} tries", format_token(&token_str), tries);
+                    break;
+                }
+
+                new_token_set.add_token(&token_str);
             }
-            Err(_) => {
-                println!("Adding token {:?}", &new_token_str)
+
+            if !found {
+                break
             }
         }
-
-        // if new_token_set.ntokens > 256 + ntokens {
-
-        // }
 
         token_set = new_token_set;
     }
@@ -649,7 +730,7 @@ fn main() {
 
     let mut token_set =
         if args.input.is_empty() {
-            TokenSet::build_with_bin_literals()
+            TokenSet::build_with_hex_literals()
         } else {
             let contents = std::fs::read_to_string(args.input).unwrap();
             let parsed = json::parse(&contents).unwrap();
@@ -663,13 +744,13 @@ fn main() {
             for token_str in parsed["tokens"].members() {
                 dbg!(token_str);
                 if token_str.is_string() {
-                    token_set.add_token(token_str.as_str().unwrap().as_bytes(), false);
+                    token_set.add_token(token_str.as_str().unwrap().as_bytes());
                 } else {
                     let mut s = vec![];
                     for b in token_str.members() {
                         s.push(b.as_u8().unwrap());
                     }
-                    token_set.add_token(&s, false);
+                    token_set.add_token(&s);
                 }
             }
 
