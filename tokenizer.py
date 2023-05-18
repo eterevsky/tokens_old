@@ -3,6 +3,7 @@ from itertools import islice
 import math
 from typing import Self, Iterable
 from operator import itemgetter
+import math
 
 from tokens import TokenSet, Token
 import tokens
@@ -94,6 +95,15 @@ class TokenStats(object):
     def used_tokens(self) -> int:
         return sum(1 for count in self.count if count > 0)
 
+    @property
+    def entropy(self) -> float:
+        total = self.total_tokens
+        total_entropy = 0
+        for c in self.count:
+            if c != 0:
+                total_entropy += c * math.log2(c / total)
+        return total_entropy / self.input_size
+
     def as_json(self) -> dict:
         return {
             "ntokens": self.token_set.ntokens,
@@ -101,7 +111,8 @@ class TokenStats(object):
             "used_tokens": self.used_tokens,
             "total_tokens": self.total_tokens,
             "bytes_per_token": self.input_size / self.total_tokens,
-            "bits_per_byte": self.total_tokens * math.log2(self.token_set.ntokens) / self.input_size
+            "bits_per_byte": self.total_tokens * math.log2(self.token_set.ntokens) / self.input_size,
+            "entropy_per_byte": -self.entropy,
         }
 
     def report(self, show_tokens=True):
@@ -114,7 +125,7 @@ class TokenStats(object):
         bytes_per_token = self.input_size / self.total_tokens
         bits_per_byte = self.total_tokens * math.log2(tokens_in_set) / self.input_size
         print(
-            f"Bytes per token: {bytes_per_token}, bits per byte: {bits_per_byte}"
+            f"Bytes per token: {bytes_per_token}, bits per byte: {bits_per_byte}, entropy per byte: {self.entropy}"
         )
         if show_tokens:
             for token_id, count in pairs[:200]:
@@ -137,10 +148,10 @@ class Tokenizer(object):
     def tokenize(self, stream: Iterable[int]) -> Iterable[Token]:
         pass
 
-    def tokenize_str(self, string: str) -> Iterable[Token]:
+    def tokenize_str(self, string: str, expand_literals: bool) -> Iterable[Token]:
         for f in self.filters:
             string = f.encode(string)
-        return self.tokenize(string.encode("utf-8"))
+        return self.tokenize(string.encode("utf-8"), expand_literals=expand_literals)
 
     def _make_fallbacks(self) -> list[list[Token]]:
         fallbacks = []
@@ -167,7 +178,7 @@ class Tokenizer(object):
 
         stats.input_size += len(string.encode("utf-8"))
 
-        for token in self.tokenize_str(string):
+        for token in self.tokenize_str(string, expand_literals=True):
             stats.count_token(token)
 
         return stats

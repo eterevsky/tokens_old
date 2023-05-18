@@ -153,21 +153,24 @@ def optimize_bpe(
 
     Inspired by https://aclanthology.org/P16-1162.pdf
     """
+
     while True:
         tokenizer = OptimalTokenizer(token_set, filters)
+
         pair_count = {}
         total_count = 0
         prev_token = None
 
-        for chunk in data.chunks():
-            for token in tokenizer.tokenize(chunk, expand_literals=False):
-                total_count += 1
+        for chunk in data.chunks_str():
+            for token in tokenizer.tokenize_str(chunk, expand_literals=False):
                 if token.is_literal:
+                    total_count += literal_cost
                     pair_count[token.string] = (
                         pair_count.get(token.string, 0) + literal_cost - 1
                     )
                     prev_token = None
                 else:
+                    total_count += 1
                     if prev_token is not None:
                         s = prev_token.string + token.string
                         pair_count[s] = pair_count.get(s, 0) + 1
@@ -175,8 +178,7 @@ def optimize_bpe(
 
         added_token, count = max(pair_count.items(), key=itemgetter(1))
 
-        print(f"Total tokens: {total_count}")
-        print(f"Trying to add token {added_token} with count {count}")
+        print(f"{total_count} Adding token {added_token} with count {count}")
 
         token_set.add_string(added_token)
 
@@ -185,6 +187,8 @@ def optimize_bpe(
 
         tokenizer = OptimalTokenizer(token_set, filters)
         stats = tokenizer.tokenize_chunks(data)
+
+        pre_remove_count = stats.total_tokens
 
         token_counts = [(i, count) for i, count in enumerate(stats.count)]
         token_counts.sort(key=itemgetter(1))
@@ -201,9 +205,10 @@ def optimize_bpe(
 
             tokenizer = OptimalTokenizer(token_set, filters)
             stats: TokenStats = tokenizer.tokenize_chunks(data)
+
             if stats.total_tokens < total_count:
                 print(
-                    f"Removing token {token.string} after {tries} tries. Total:"
+                    f"{pre_remove_count} Removing token {token.string} after {tries} tries."
                 )
                 found = True
                 break
