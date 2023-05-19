@@ -51,7 +51,7 @@ class FilterCaps(Filter):
             else:
                 if in_word:
                     merged = "".join(word)
-                    if merged[0].isupper() and merged[1:].islower():
+                    if merged[0].isupper() and (len(merged) == 1 or merged[1:].islower()):
                         yield CHR_CAPITALIZE
                         for c in word:
                             yield c.lower()

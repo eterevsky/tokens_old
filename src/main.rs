@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, BufWriter, Read, Write, BufRead};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
@@ -409,14 +409,14 @@ fn optimize_bpe(token_set: &TokenSet, ntokens: usize, filename: &str) -> (TokenS
 
                 let stats = tokenize_file(&new_token_set, filename);
 
-                if stats.cost < initial_stats.cost
-                    && stats.token_to_add(&new_token_set) == token_str
-                {
-                    println!("Cost after removing {} would be {}, but it would be added on the next iteration.", format_token(&token_str), stats.cost);
-                }
+                // if stats.cost < initial_stats.cost
+                //     && stats.token_to_add(&new_token_set) == token_str
+                // {
+                //     println!("Cost after removing {} would be {}, but it would be added on the next iteration.", format_token(&token_str), stats.cost);
+                // }
 
                 if stats.cost < initial_stats.cost
-                    && stats.token_to_add(&new_token_set) != token_str
+                    // && stats.token_to_add(&new_token_set) != token_str
                 {
                     // Found a token to remove.
                     found = true;
@@ -482,6 +482,98 @@ fn optimize_tokens(
     }
 }
 
+fn filter_text(filename: &str, caps: bool, words: bool, output: &str) {
+    println!("filter_text");
+    let input = File::open(filename).unwrap();
+    let mut output = File::create(output).unwrap();
+
+    let reader = BufReader::new(input);
+    let mut writer = BufWriter::new(&mut output);
+
+    let mut word = Vec::new();
+
+    for line in reader.lines() {
+        // println!("{:?}", line);
+        let line = line.unwrap();
+        let mut out_line = Vec::new();
+        let mut hanging_space = false;
+        word.clear();
+
+        for ch in line.chars() {
+            // println!("{:?}", ch);
+            if ch.is_alphabetic() {
+                hanging_space = false;
+                word.push(ch);
+            } else {
+                if !word.is_empty() {
+                    if caps {
+                        if word[0].is_uppercase() && word[1..].iter().all(|&c|
+                        c.is_lowercase()) {
+                            out_line.push('\x14');
+                            word[0] = word[0].to_lowercase().next().unwrap();
+                        } else if word.iter().all(|&c| c.is_uppercase()) {
+                            out_line.push('\x15');
+                            for i in 0..word.len() {
+                                word[i] = word[i].to_lowercase().next().unwrap();
+                            }
+                        }
+                    }
+
+                    out_line.extend(word.iter());
+                    word.clear();
+
+                    if words {
+                        out_line.push('\x16');
+                    }
+
+                    if words && ch == ' ' {
+                        hanging_space = true;
+                    } else {
+                        out_line.push(ch);
+                        hanging_space = false;
+                    }
+                } else {
+                    if hanging_space {
+                        out_line.push(' ');
+                    }
+                    hanging_space = false;
+                    out_line.push(ch);
+                }
+            }
+        }
+
+        if !word.is_empty() {
+            if caps {
+                if word[0].is_uppercase() && word[1..].iter().all(|&c|
+                c.is_lowercase()) {
+                    out_line.push('\x14');
+                    word[0] = word[0].to_lowercase().next().unwrap();
+                } else if word.iter().all(|&c| c.is_uppercase()) {
+                    out_line.push('\x15');
+                    for i in 0..word.len() {
+                        word[i] = word[i].to_lowercase().next().unwrap();
+                    }
+                }
+            }
+
+            out_line.extend(word.iter());
+
+            if words {
+                out_line.push('\x16');
+            }
+        }
+
+        if hanging_space {
+            out_line.push(' ');
+        }
+
+        out_line.push('\n');
+        let output_string: String = out_line.iter().collect();
+
+        writer.write_all(output_string.as_bytes()).unwrap();
+    }
+}
+
 #[derive(Parser, Debug)]
 struct Args {
     #[arg(short, long)]
@@ -511,11 +603,24 @@ enum Command {
         #[arg(short, long)]
         fallback2: bool,
     },
+
+    FilterText {
+        #[arg(short, long)]
+        caps: bool,
+
+        #[arg(short, long)]
+        words: bool,
+
+        #[arg(short, long)]
+        output: String,
+    }
 }
 
 fn main() {
     let args = Args::parse();
     let filename = args.data.as_str();
+
+    println!("started");
 
     match &args.command {
         Command::Tokenize { tokens } => {
@@ -527,5 +632,9 @@ fn main() {
             ntokens,
             fallback2,
         } => optimize_tokens(filename, input_tokens, output_tokens, *ntokens, *fallback2),
+
+        Command::FilterText {
+            caps, words, output
+        } => filter_text(filename, *caps, *words, output.as_str())
     }
 }
