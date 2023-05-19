@@ -1,194 +1,14 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Read};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use clap::Parser;
-use memmap2::MmapOptions;
+use clap::{Parser, Subcommand};
 
-#[derive(Clone)]
-struct Stats {
-    byte_count: [usize; 256],
-}
+mod tokens;
 
-impl Stats {
-    fn new() -> Self {
-        Stats {
-            byte_count: [0; 256],
-        }
-    }
-
-    fn process_byte(&mut self, byte: u8) {
-        self.byte_count[byte as usize] += 1;
-    }
-}
-
-#[derive(Clone, Debug)]
-struct Token {
-    string: Vec<u8>,
-    is_literal: bool,
-    is_mandatory: bool,
-    // Index of the longest other token which is a suffix of this one.
-    suffix: Option<usize>,
-    cost: usize,
-}
-
-impl Token {
-    fn new(string: &[u8], is_literal: bool, is_mandatory: bool, cost: usize) -> Self {
-        Token {
-            string: string.to_vec(),
-            is_literal,
-            is_mandatory,
-            suffix: None,
-            cost,
-        }
-    }
-}
-
-#[derive(Clone)]
-struct TokenSet {
-    tokens: Vec<Token>,
-    tokens_by_string: HashMap<Vec<u8>, usize>,
-    literal_cost: usize,
-    ntokens: usize,
-}
-
-impl TokenSet {
-    fn add_mandatory_token(&mut self, string: &[u8]) {
-        if let Some(&existing) = self.tokens_by_string.get(string) {
-            let existing = &self.tokens[existing];
-            assert!(existing.is_literal);
-        }
-        let index = self.tokens.len();
-        let token = Token::new(string, false, true, 1);
-        self.tokens_by_string.insert(token.string.clone(), index);
-        self.tokens.push(token);
-        self.ntokens += 1;
-    }
-
-    fn add_token(&mut self, string: &[u8]) {
-        if let Some(&existing) = self.tokens_by_string.get(string) {
-            let existing = &self.tokens[existing];
-            assert!(existing.is_literal || existing.is_mandatory);
-            if !existing.is_literal {
-                return;
-            }
-        }
-
-        let index = self.tokens.len();
-        let token = Token::new(string, false, false, 1);
-        self.tokens_by_string.insert(token.string.clone(), index);
-        self.tokens.push(token);
-        self.ntokens += 1;
-    }
-
-    fn add_literal(&mut self, value: u8) {
-        let token = Token::new(&[value], true, false, self.literal_cost);
-        self.tokens_by_string
-            .insert(token.string.clone(), self.tokens.len());
-        self.tokens.push(token);
-        self.ntokens += 1;
-    }
-
-    fn remove_token(&mut self, token_str: &[u8]) {
-        let token_id = *self.tokens_by_string.get(token_str).unwrap();
-
-        assert!(token_id >= 256); // Can't remove literals
-        assert!(!self.tokens[token_id].is_literal);
-        assert!(!self.tokens[token_id].is_mandatory);
-        self.tokens.remove(token_id);
-        self.ntokens -= 1;
-
-        self.tokens_by_string.clear();
-        for i in 0..self.ntokens {
-            let token = &self.tokens[i];
-            self.tokens_by_string.insert(token.string.clone(), i);
-        }
-    }
-
-    fn build_with_hex_literals() -> Self {
-        let mut token_set = TokenSet {
-            tokens: Vec::new(),
-            tokens_by_string: HashMap::new(),
-            literal_cost: 3,
-            ntokens: 0,
-        };
-
-        for i in 0..=255 {
-            token_set.add_literal(i);
-        }
-        token_set.add_mandatory_token(&[0x10]);
-        for i in ('0' as u8)..=('9' as u8) {
-            token_set.add_mandatory_token(&[i]);
-        }
-        for i in ('a' as u8)..=('f' as u8) {
-            token_set.add_mandatory_token(&[i]);
-        }
-
-        token_set.ntokens = token_set.tokens.len();
-
-        token_set
-    }
-
-    fn build_with_bin_literals() -> Self {
-        let mut token_set = TokenSet {
-            tokens: Vec::new(),
-            tokens_by_string: HashMap::new(),
-            literal_cost: 8,
-            ntokens: 0,
-        };
-
-        for i in 0..=255 {
-            token_set.add_literal(i);
-        }
-        token_set.add_mandatory_token(&[0x11]);
-        token_set.add_mandatory_token(&[0x12]);
-
-        token_set.ntokens = token_set.tokens.len();
-
-        token_set
-    }
-
-    fn generate_suffixes(&mut self) {
-        for i in 256..self.tokens.len() {
-            let mut token = &mut self.tokens[i];
-            for start in 1..token.string.len() {
-                if let Some(&idx) = self.tokens_by_string.get(&token.string[start..]) {
-                    token.suffix = Some(idx);
-                    break;
-                }
-            }
-        }
-    }
-
-    fn to_json(&self) -> json::JsonValue {
-        let mut out = json::object! {
-            tokens: []
-        };
-
-        let mut token_strs = vec![];
-
-        for token in self.tokens.iter() {
-            if !token.is_literal {
-                token_strs.push(token.string.clone());
-            }
-        }
-
-        token_strs.sort_unstable();
-
-        for token_str in token_strs.iter() {
-            let value: json::JsonValue = match std::str::from_utf8(&token_str) {
-                Ok(s) => s.into(),
-                Err(_) => token_str.as_slice().into(),
-            };
-
-            out["tokens"].push(value).unwrap();
-        }
-
-        out
-    }
-}
+use self::tokens::TokenSet;
 
 #[derive(Debug)]
 struct SuffixState {
@@ -273,12 +93,11 @@ impl TokenStats {
             }
         }
 
-        let ifirst = top_pair / token_set.ntokens;
-        let isecond = top_pair % token_set.ntokens;
+        let ifirst = top_pair / token_set.ntokens();
+        let isecond = top_pair % token_set.ntokens();
 
         let mut token_str = token_set.tokens[ifirst].string.clone();
         token_str.extend(token_set.tokens[isecond].string.clone());
-
 
         if top_literal_count > top_pair_count {
             vec![top_literal as u8]
@@ -427,7 +246,7 @@ impl Tokenizer {
             let token = &self.token_set.tokens[token_id];
             token_stats.token_count[token_id] += 1;
 
-            token_stats.pair_count[token_id * self.token_set.ntokens + next_token_id] += 1;
+            token_stats.pair_count[token_id * self.token_set.ntokens() + next_token_id] += 1;
 
             next_token_id = token_id;
             pos = pos.checked_sub(token.string.len()).unwrap();
@@ -520,7 +339,7 @@ fn tokenize_file(token_set: &TokenSet, filename: &str) -> TokenStats {
         }
         let elapsed = std::time::Instant::now() - start;
         if total_stats.scanned_bytes > 100000000 {
-                eprintln!(
+            eprintln!(
                 "\rAvg pace: {:.1} MB / s",
                 total_stats.scanned_bytes as f64 / 1000000.0 / elapsed.as_secs_f64()
             );
@@ -544,10 +363,9 @@ fn format_token(s: &[u8]) -> String {
 fn optimize_bpe(token_set: &TokenSet, ntokens: usize, filename: &str) -> (TokenSet, TokenStats) {
     let mut token_set = token_set.clone();
     let mut prev_stats = None;
-    let mut initial_stats = TokenStats::new(&token_set);
 
     loop {
-        initial_stats = match prev_stats {
+        let initial_stats = match prev_stats {
             Some(s) => s,
             None => tokenize_file(&token_set, filename),
         };
@@ -563,7 +381,7 @@ fn optimize_bpe(token_set: &TokenSet, ntokens: usize, filename: &str) -> (TokenS
             format_token(&new_token_str)
         );
 
-        if new_token_set.ntokens > 256 + ntokens {
+        if new_token_set.ntokens() > 256 + ntokens {
             let stats = tokenize_file(&new_token_set, filename);
             let mut token_ids: Vec<usize> = (0..new_token_set.tokens.len()).collect();
             token_ids.sort_unstable_by_key(|&i| stats.token_count[i]);
@@ -591,11 +409,15 @@ fn optimize_bpe(token_set: &TokenSet, ntokens: usize, filename: &str) -> (TokenS
 
                 let stats = tokenize_file(&new_token_set, filename);
 
-                if stats.cost < initial_stats.cost && stats.token_to_add(&new_token_set) == token_str {
+                if stats.cost < initial_stats.cost
+                    && stats.token_to_add(&new_token_set) == token_str
+                {
                     println!("Cost after removing {} would be {}, but it would be added on the next iteration.", format_token(&token_str), stats.cost);
                 }
 
-                if stats.cost < initial_stats.cost && stats.token_to_add(&new_token_set) != token_str {
+                if stats.cost < initial_stats.cost
+                    && stats.token_to_add(&new_token_set) != token_str
+                {
                     // Found a token to remove.
                     found = true;
                     prev_stats = Some(stats);
@@ -611,85 +433,99 @@ fn optimize_bpe(token_set: &TokenSet, ntokens: usize, filename: &str) -> (TokenS
             }
 
             if !found {
-                break;
+                return (token_set, initial_stats);
             }
         }
 
         token_set = new_token_set;
     }
-
-    (token_set, initial_stats)
 }
 
-#[derive(Parser, Debug)]
-struct Args {
-    #[arg(short, long, default_value_t = String::new())]
-    data: String,
-
-    #[arg(short, long, default_value_t = String::new())]
-    input: String,
-
-    #[arg(short, long, default_value_t = String::new())]
-    output: String,
-
-    #[arg(short, long, default_value_t = 0)]
+fn optimize_tokens(
+    data_filename: &str,
+    input_tokens: &Option<String>,
+    output_tokens: &Option<String>,
     ntokens: usize,
-}
-
-fn main() {
-    let args = Args::parse();
-
-    let mut fallback16 = false;
-
-    let token_set = if args.input.is_empty() {
-        TokenSet::build_with_bin_literals()
+    fallback2: bool,
+) {
+    let token_set = if let Some(tokens_file) = input_tokens {
+        TokenSet::from_json(tokens_file.as_str())
     } else {
-        let contents = std::fs::read_to_string(args.input).unwrap();
-        let parsed = json::parse(&contents).unwrap();
-
-        fallback16 = parsed["config"]["fallback16"].as_bool().unwrap();
-
-        let mut token_set = if fallback16 {
-            TokenSet::build_with_hex_literals()
-        } else {
+        if fallback2 {
             TokenSet::build_with_bin_literals()
-        };
-
-        for token_str in parsed["tokens"].members() {
-            if token_str.is_string() {
-                token_set.add_token(token_str.as_str().unwrap().as_bytes());
-            } else {
-                let mut s = vec![];
-                for b in token_str.members() {
-                    s.push(b.as_u8().unwrap());
-                }
-                token_set.add_token(&s);
-            }
+        } else {
+            TokenSet::build_with_hex_literals()
         }
-
-        token_set
     };
 
     let tokens_json = token_set.to_json();
-    println!("{}", json::stringify(tokens_json));
+    println!(
+        "Initial token set:\n{}",
+        json::stringify_pretty(tokens_json, 2)
+    );
 
-    let filename = args.data.as_str();
-
-    let (token_set, token_stats) = optimize_bpe(&token_set, args.ntokens, filename);
+    let (token_set, token_stats) = optimize_bpe(&token_set, ntokens, data_filename);
 
     let mut tokens_json = token_set.to_json();
 
-    tokens_json["stats"]["ntokens"] = (token_set.ntokens - 256).into();
+    tokens_json["stats"]["ntokens"] = (token_set.ntokens() - 256).into();
     tokens_json["stats"]["scanned_bytes"] = token_stats.scanned_bytes.into();
     tokens_json["stats"]["total_tokens"] = token_stats.cost.into();
     tokens_json["stats"]["bytes_per_token"] =
         (token_stats.scanned_bytes as f64 / token_stats.cost as f64).into();
-    tokens_json["config"]["fallback16"] = fallback16.into();
 
     let tokens_json_str = json::stringify_pretty(tokens_json, 2);
     println!("{}", &tokens_json_str);
 
-    if !args.output.is_empty() {
-        std::fs::write(args.output, &tokens_json_str).unwrap();
+    if let Some(out) = output_tokens {
+        std::fs::write(&out, &tokens_json_str).unwrap();
+    }
+}
+
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(short, long)]
+    data: String,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    Tokenize {
+        #[arg(short, long)]
+        tokens: String,
+    },
+
+    OptimizeTokens {
+        #[arg(short, long)]
+        input_tokens: Option<String>,
+
+        #[arg(short, long)]
+        output_tokens: Option<String>,
+
+        #[arg(short, long)]
+        ntokens: usize,
+
+        #[arg(short, long)]
+        fallback2: bool,
+    },
+}
+
+fn main() {
+    let args = Args::parse();
+    let filename = args.data.as_str();
+
+    match &args.command {
+        Command::Tokenize { tokens } => {
+            unimplemented!();
+        }
+        Command::OptimizeTokens {
+            input_tokens,
+            output_tokens,
+            ntokens,
+            fallback2,
+        } => optimize_tokens(filename, input_tokens, output_tokens, *ntokens, *fallback2),
     }
 }
