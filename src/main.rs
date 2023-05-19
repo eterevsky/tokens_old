@@ -70,6 +70,7 @@ impl TokenSet {
     fn add_token(&mut self, string: &[u8]) {
         if let Some(&existing) = self.tokens_by_string.get(string) {
             let existing = &self.tokens[existing];
+            assert!(existing.is_literal || existing.is_mandatory);
             if !existing.is_literal {
                 return;
             }
@@ -90,8 +91,12 @@ impl TokenSet {
         self.ntokens += 1;
     }
 
-    fn remove_token(&mut self, token_id: usize) {
+    fn remove_token(&mut self, token_str: &[u8]) {
+        let token_id = *self.tokens_by_string.get(token_str).unwrap();
+
         assert!(token_id >= 256); // Can't remove literals
+        assert!(!self.tokens[token_id].is_literal);
+        assert!(!self.tokens[token_id].is_mandatory);
         self.tokens.remove(token_id);
         self.ntokens -= 1;
 
@@ -241,6 +246,45 @@ impl TokenStats {
         }
         self.cost += other.cost;
         self.scanned_bytes += other.scanned_bytes;
+    }
+
+    fn token_to_add(&self, token_set: &TokenSet) -> Vec<u8> {
+        let mut top_literal = 0;
+        let mut top_literal_count = 0;
+
+        for i in 0..256 {
+            if self.token_count[i] > top_literal_count {
+                top_literal = i;
+                top_literal_count = self.token_count[i];
+            }
+        }
+
+        // println!(
+        //     "Top literal: {} with count {}",
+        //     top_literal, top_literal_count
+        // );
+
+        let mut top_pair = 0;
+        let mut top_pair_count = 0;
+        for ipair in 0..self.pair_count.len() {
+            if self.pair_count[ipair] > top_pair_count {
+                top_pair = ipair;
+                top_pair_count = self.pair_count[ipair];
+            }
+        }
+
+        let ifirst = top_pair / token_set.ntokens;
+        let isecond = top_pair % token_set.ntokens;
+
+        let mut token_str = token_set.tokens[ifirst].string.clone();
+        token_str.extend(token_set.tokens[isecond].string.clone());
+
+
+        if top_literal_count > top_pair_count {
+            vec![top_literal as u8]
+        } else {
+            token_str
+        }
     }
 }
 
@@ -458,10 +502,12 @@ fn tokenize_file(token_set: &TokenSet, filename: &str) -> TokenStats {
                 total_stats.add(&result);
                 jobs_in_flight -= 1;
                 let elapsed = std::time::Instant::now() - start;
-                eprint!(
-                    "\rAvg pace: {:.1} MB / s",
-                    total_stats.scanned_bytes as f64 / 1000000.0 / elapsed.as_secs_f64()
-                );
+                if total_stats.scanned_bytes > 100000000 {
+                    eprint!(
+                        "\rAvg pace: {:.1} MB / s",
+                        total_stats.scanned_bytes as f64 / 1000000.0 / elapsed.as_secs_f64()
+                    );
+                }
             }
         }
 
@@ -473,10 +519,12 @@ fn tokenize_file(token_set: &TokenSet, filename: &str) -> TokenStats {
             jobs_in_flight -= 1;
         }
         let elapsed = std::time::Instant::now() - start;
-        eprintln!(
-            "\rAvg pace: {:.1} MB / s",
-            total_stats.scanned_bytes as f64 / 1000000.0 / elapsed.as_secs_f64()
-        );
+        if total_stats.scanned_bytes > 100000000 {
+                eprintln!(
+                "\rAvg pace: {:.1} MB / s",
+                total_stats.scanned_bytes as f64 / 1000000.0 / elapsed.as_secs_f64()
+            );
+        }
 
         while !join_handles.is_empty() {
             join_handles.pop().unwrap().join().unwrap();
@@ -504,48 +552,7 @@ fn optimize_bpe(token_set: &TokenSet, ntokens: usize, filename: &str) -> (TokenS
             None => tokenize_file(&token_set, filename),
         };
 
-        let mut top_literal = 0;
-        let mut top_literal_count = 0;
-
-        for i in 0..256 {
-            if initial_stats.token_count[i] > top_literal_count {
-                top_literal = i;
-                top_literal_count = initial_stats.token_count[i];
-            }
-        }
-
-        println!(
-            "Top literal: {} with count {}",
-            top_literal, top_literal_count
-        );
-
-        let mut top_pair = 0;
-        let mut top_pair_count = 0;
-        for ipair in 0..initial_stats.pair_count.len() {
-            if initial_stats.pair_count[ipair] > top_pair_count {
-                top_pair = ipair;
-                top_pair_count = initial_stats.pair_count[ipair];
-            }
-        }
-
-        let ifirst = top_pair / token_set.ntokens;
-        let isecond = top_pair % token_set.ntokens;
-
-        let mut token_str = token_set.tokens[ifirst].string.clone();
-        token_str.extend(token_set.tokens[isecond].string.clone());
-
-        println!(
-            "Top pair: {} with count {}",
-            format_token(&token_str),
-            top_pair_count
-        );
-
-        let new_token_str = if top_literal_count > top_pair_count {
-            vec![top_literal as u8]
-        } else {
-            token_str
-        };
-
+        let new_token_str = initial_stats.token_to_add(&token_set);
         let mut new_token_set = token_set.clone();
         new_token_set.add_token(&new_token_str);
         prev_stats = None;
@@ -561,22 +568,34 @@ fn optimize_bpe(token_set: &TokenSet, ntokens: usize, filename: &str) -> (TokenS
             let mut token_ids: Vec<usize> = (0..new_token_set.tokens.len()).collect();
             token_ids.sort_unstable_by_key(|&i| stats.token_count[i]);
 
-            let mut found = false;
-            let mut tries = 0;
+            let mut token_strs = Vec::new();
 
             for &token_id_to_remove in token_ids.iter() {
                 let token_to_remove = &new_token_set.tokens[token_id_to_remove];
                 if token_to_remove.is_literal || token_to_remove.is_mandatory {
                     continue;
                 }
-                tries += 1;
-                let token_str = token_to_remove.string.clone();
+                // Because the ids will change when we are removing and adding
+                // tokens.
+                token_strs.push(token_to_remove.string.clone());
+            }
 
-                new_token_set.remove_token(token_id_to_remove);
+            let mut found = false;
+            let mut tries = 0;
+
+            for token_str in token_strs.iter() {
+                let token_str = token_str.as_slice();
+                tries += 1;
+
+                new_token_set.remove_token(token_str);
 
                 let stats = tokenize_file(&new_token_set, filename);
 
-                if stats.cost < initial_stats.cost {
+                if stats.cost < initial_stats.cost && stats.token_to_add(&new_token_set) == token_str {
+                    println!("Cost after removing {} would be {}, but it would be added on the next iteration.", format_token(&token_str), stats.cost);
+                }
+
+                if stats.cost < initial_stats.cost && stats.token_to_add(&new_token_set) != token_str {
                     // Found a token to remove.
                     found = true;
                     prev_stats = Some(stats);
