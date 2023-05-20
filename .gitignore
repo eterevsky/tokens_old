@@ -1,7 +1,10 @@
+.DS_Store
+.vscode
 __pycache__
 /target
 Cargo.lock
 code.txt
 data.txt
 data20.txt
+data/books3*
 texts/
