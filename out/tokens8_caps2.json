@@ -1,0 +1,21 @@
+{
+  "tokens": [
+    "\u0011",
+    "\u0012",
+    " ",
+    "a",
+    "e",
+    "i",
+    "o",
+    "t"
+  ],
+  "config": {
+    "fallback16": false
+  },
+  "stats": {
+    "ntokens": 8,
+    "scanned_bytes": 111192723250,
+    "total_tokens": 507292262666,
+    "bytes_per_token": 0.21918868359166958
+  }
+}
