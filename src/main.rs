@@ -483,7 +483,6 @@ fn optimize_tokens(
 }
 
 fn filter_text(filename: &str, caps: bool, words: bool, output: &str) {
-    println!("filter_text");
     let input = File::open(filename).unwrap();
     let mut output = File::create(output).unwrap();
 
@@ -574,6 +573,26 @@ fn filter_text(filename: &str, caps: bool, words: bool, output: &str) {
     }
 }
 
+fn count_hex_digits(filename: &str) {
+    let input = File::open(filename).unwrap();
+    let reader = BufReader::new(input);
+
+    let mut counts: [usize; 16] = [0; 16];
+
+    for byte in reader.bytes() {
+        let byte = byte.unwrap();
+        counts[(byte >> 4) as usize] += 1;
+        counts[(byte & 15) as usize] += 1;
+    }
+
+    let mut digits = (0..16).collect::<Vec<usize>>();
+    digits.sort_unstable_by_key(|&d| counts[d]);
+
+    for &d in digits.iter() {
+        println!("{:x}  {}", d, counts[d]);
+    }
+}
+
 #[derive(Parser, Debug)]
 struct Args {
     #[arg(short, long)]
@@ -613,14 +632,14 @@ enum Command {
 
         #[arg(short, long)]
         output: String,
-    }
+    },
+
+    CountHexDigits,
 }
 
 fn main() {
     let args = Args::parse();
     let filename = args.data.as_str();
-
-    println!("started");
 
     match &args.command {
         Command::Tokenize { tokens } => {
@@ -635,6 +654,8 @@ fn main() {
 
         Command::FilterText {
             caps, words, output
-        } => filter_text(filename, *caps, *words, output.as_str())
+        } => filter_text(filename, *caps, *words, output.as_str()),
+
+        Command::CountHexDigits => count_hex_digits(filename),
     }
 }
